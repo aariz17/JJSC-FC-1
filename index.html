@@ -2920,509 +2920,1705 @@
     </aside>
   </div>
 </section>
-(() => {
-  const canvas = document.getElementById("jjscPitchCanvas");
-  if (!canvas) return;
-  const ctx = canvas.getContext("2d");
 
-  const scoreEl = document.getElementById("simScore");
-  const clockEl = document.getElementById("simClock");
-  const awayNameEl = document.getElementById("simAwayName");
-  const opponentSelect = document.getElementById("simOpponent");
-  const tacticSelect = document.getElementById("simTactic");
-  const playBtn = document.getElementById("simPlayBtn");
-  const resetBtn = document.getElementById("simResetBtn");
-  const eventList = document.getElementById("simEventList");
+<html lang="en" class="scroll-smooth">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>JJSC FC | Jhonjhonia Jubo Sporting Club</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:ital,wght@0,500;0,600;0,700;1,700&family=Inter:wght@400;500;600;700;800&family=Playfair+Display:ital,wght@1,700;1,800&family=Teko:wght@500;600;700&display=swap" rel="stylesheet">
 
-  // --- Web Audio API Synthesizer (no external audio assets needed) ---
-  let audioCtx = null;
-  function getAudio() {
-    if (!audioCtx) {
-      const Ctx = window.AudioContext || window.webkitAudioContext;
-      if (Ctx) audioCtx = new Ctx();
-    }
-    if (audioCtx && audioCtx.state === "suspended") {
-      audioCtx.resume();
-    }
-    return audioCtx;
-  }
-
-  function playWhistle() {
-    const ac = getAudio();
-    if (!ac) return;
-    const now = ac.currentTime;
-    const osc = ac.createOscillator();
-    const lfo = ac.createOscillator();
-    const lfoGain = ac.createGain();
-    const gain = ac.createGain();
-
-    osc.type = "sine";
-    osc.frequency.setValueAtTime(2820, now);
-    lfo.frequency.setValueAtTime(36, now);
-    lfoGain.gain.setValueAtTime(140, now);
-
-    gain.gain.setValueAtTime(0.001, now);
-    gain.gain.exponentialRampToValueAtTime(0.14, now + 0.03);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.42);
-
-    lfo.connect(lfoGain);
-    lfoGain.connect(osc.frequency);
-    osc.connect(gain);
-    gain.connect(ac.destination);
-
-    lfo.start(now);
-    osc.start(now);
-    lfo.stop(now + 0.44);
-    osc.stop(now + 0.44);
-  }
-
-  function playCrowdRoar(duration = 1.4) {
-    const ac = getAudio();
-    if (!ac) return;
-    const now = ac.currentTime;
-    const bufferSize = Math.floor(ac.sampleRate * duration);
-    const buffer = ac.createBuffer(1, bufferSize, ac.sampleRate);
-    const data = buffer.getChannelData(0);
-    for (let i = 0; i < bufferSize; i++) {
-      data[i] = (Math.random() * 2 - 1) * 0.6;
-    }
-
-    const noise = ac.createBufferSource();
-    noise.buffer = buffer;
-
-    const filter = ac.createBiquadFilter();
-    filter.type = "bandpass";
-    filter.frequency.setValueAtTime(520, now);
-    filter.Q.setValueAtTime(0.7, now);
-
-    const gain = ac.createGain();
-    gain.gain.setValueAtTime(0.001, now);
-    gain.gain.linearRampToValueAtTime(0.18, now + duration * 0.35);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
-
-    noise.connect(filter);
-    filter.connect(gain);
-    gain.connect(ac.destination);
-
-    noise.start(now);
-    noise.stop(now + duration);
-  }
-
-  function playGoalHorn() {
-    const ac = getAudio();
-    if (!ac) return;
-    const now = ac.currentTime;
-    const freqs = [146.83, 220.0, 293.66]; // D3, A3, D4 brass chord
-    const gain = ac.createGain();
-    gain.gain.setValueAtTime(0.001, now);
-    gain.gain.linearRampToValueAtTime(0.12, now + 0.08);
-    gain.gain.setValueAtTime(0.12, now + 0.75);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 1.15);
-    gain.connect(ac.destination);
-
-    freqs.forEach((f) => {
-      const osc = ac.createOscillator();
-      osc.type = "sawtooth";
-      osc.frequency.setValueAtTime(f, now);
-      osc.connect(gain);
-      osc.start(now);
-      osc.stop(now + 1.18);
-    });
-
-    playCrowdRoar(1.6);
-  }
-
-  document.getElementById("sfxWhistleBtn")?.addEventListener("click", playWhistle);
-  document.getElementById("sfxRoarBtn")?.addEventListener("click", () => playCrowdRoar(1.4));
-  document.getElementById("sfxGoalBtn")?.addEventListener("click", playGoalHorn);
-
-  // --- Match State & Pitch Geometry ---
-  const W = canvas.width;
-  const H = canvas.height;
-  const pad = 28;
-  const goalH = 92;
-  const goalDepth = 16;
-
-  let running = false;
-  let simSeconds = 0;
-  let lastMinuteLogged = 0;
-  let homeGoals = 0;
-  let awayGoals = 0;
-
-  const ball = {
-    x: W / 2,
-    y: H / 2,
-    vx: 0,
-    vy: 0,
-    r: 6,
-    owner: null,
-  };
-
-  function createSquad(side) {
-    const isHome = side === "home";
-    const baseX = isHome ? W * 0.28 : W * 0.72;
-    const roles = [
-      { label: "GK", dx: isHome ? -150 : 150, dy: 0 },
-      { label: "DEF", dx: isHome ? -65 : 65, dy: -95 },
-      { label: "DEF", dx: isHome ? -65 : 65, dy: 95 },
-      { label: "MID", dx: isHome ? 15 : -15, dy: -65 },
-      { label: "MID", dx: isHome ? 15 : -15, dy: 65 },
-      { label: "FWD", dx: isHome ? 95 : -95, dy: 0 },
-    ];
-    return roles.map((r, idx) => ({
-      id: `${side}-${idx}`,
-      side,
-      label: r.label,
-      homeX: baseX + r.dx,
-      homeY: H / 2 + r.dy,
-      x: baseX + r.dx,
-      y: H / 2 + r.dy,
-      r: 11,
-    }));
-  }
-
-  let homePlayers = createSquad("home");
-  let awayPlayers = createSquad("away");
-
-  function logEvent(text) {
-    const minute = Math.min(90, Math.floor(simSeconds / 4));
-    const li = document.createElement("li");
-    li.textContent = `${minute}' — ${text}`;
-    eventList.prepend(li);
-    while (eventList.children.length > 18) {
-      eventList.removeChild(eventList.lastChild);
-    }
-  }
-
-  function resetPositions(kickoffSide = "home") {
-    homePlayers = createSquad("home");
-    awayPlayers = createSquad("away");
-    ball.x = W / 2;
-    ball.y = H / 2;
-    ball.vx = kickoffSide === "home" ? 2.2 : -2.2;
-    ball.vy = (Math.random() - 0.5) * 2.4;
-    ball.owner = null;
-  }
-
-  function fullReset() {
-    running = false;
-    simSeconds = 0;
-    lastMinuteLogged = 0;
-    homeGoals = 0;
-    awayGoals = 0;
-    scoreEl.textContent = "0 - 0";
-    clockEl.textContent = "00'";
-    eventList.innerHTML = "";
-    resetPositions("home");
-    logEvent("Match ready. Press Kick Off to start.");
-  }
-
-  opponentSelect?.addEventListener("change", () => {
-    awayNameEl.textContent = opponentSelect.value;
-    fullReset();
-  });
-
-  playBtn?.addEventListener("click", () => {
-    running = !running;
-    playWhistle();
-    logEvent(running ? "Play underway!" : "Match paused.");
-  });
-
-  resetBtn?.addEventListener("click", () => {
-    playWhistle();
-    fullReset();
-  });
-
-  function updatePlayers(players, isHome) {
-    const tactic = tacticSelect?.value || "balanced";
-    const pushX = tactic === "press" ? (isHome ? 38 : -38) : tactic === "counter" ? (isHome ? -18 : 18) : 0;
-
-    players.forEach((p) => {
-      const distToBall = Math.hypot(ball.x - p.x, ball.y - p.y);
-      const chaseBall = distToBall < 95 && p.label !== "GK";
-      const targetX = chaseBall ? ball.x : Math.max(pad + 18, Math.min(W - pad - 18, p.homeX + pushX));
-      const targetY = chaseBall ? ball.y : Math.max(pad + 18, Math.min(H - pad - 18, p.homeY));
-
-      const speed = p.label === "FWD" ? 1.45 : p.label === "GK" ? 0.9 : 1.25;
-      const dx = targetX - p.x;
-      const dy = targetY - p.y;
-      const len = Math.hypot(dx, dy) || 1;
-      if (len > 1.5) {
-        p.x += (dx / len) * Math.min(speed, len);
-        p.y += (dy / len) * Math.min(speed, len);
-      }
-
-      // Kick / pass / shoot when reaching ball
-      if (distToBall <= p.r + ball.r + 2) {
-        const aimGoalX = isHome ? W - pad : pad;
-        const aimGoalY = H / 2 + (Math.random() - 0.5) * (goalH * 0.75);
-        const distToGoal = Math.hypot(aimGoalX - p.x, aimGoalY - p.y);
-
-        if (distToGoal < 195 && p.label !== "GK") {
-          const angle = Math.atan2(aimGoalY - ball.y, aimGoalX - ball.x);
-          ball.vx = Math.cos(angle) * 5.6;
-          ball.vy = Math.sin(angle) * 5.6;
-          if (Math.random() < 0.25) {
-            logEvent(`${isHome ? "JJSC FC" : awayNameEl.textContent} (${p.label}) fires a shot!`);
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            display: ['Teko', 'sans-serif'],
+            tech: ['Chakra Petch', 'sans-serif'],
+            crest: ['Playfair Display', 'serif'],
+            sans: ['Inter', 'sans-serif'],
+          },
+          colors: {
+            navyDeep: '#050918',
+            navyBase: '#09122E',
+            navyCard: '#0E193E',
+            royalBlue: '#162A6B',
+            pitchGreen: '#14532d',
+            champGold: '#F5C542',
+            goldBright: '#FFE066',
+            neonLime: '#CCFF00',
+            neonCyan: '#00F0FF',
           }
-        } else {
-          const teammates = players.filter((m) => m.id !== p.id && m.label !== "GK");
-          const mate = teammates[Math.floor(Math.random() * teammates.length)] || p;
-          const angle = Math.atan2(mate.y - ball.y, mate.x - ball.x);
-          ball.vx = Math.cos(angle) * 3.8;
-          ball.vy = Math.sin(angle) * 3.8;
         }
       }
-    });
-  }
+    }
+  </script>
 
-  function stepSimulation() {
-    if (!running) return;
-
-    simSeconds += 1 / 60;
-    const matchMinute = Math.min(90, Math.floor(simSeconds / 4));
-    clockEl.textContent = `${String(matchMinute).padStart(2, "0")}'`;
-
-    if (matchMinute > lastMinuteLogged && matchMinute % 15 === 0) {
-      lastMinuteLogged = matchMinute;
-      playCrowdRoar(0.9);
+  <style>
+    :root {
+      --navy-deep: #050918;
+      --navy-base: #09122E;
+      --royal-blue: #162A6B;
+      --pitch-green: #14532d;
+      --stadium-dark: #050814;
+      --stadium-surface: #0b1120;
+      --champ-gold: #F5C542;
+      --gold-accent: #facc15;
+      --neon-lime: #CCFF00;
+      --neon-cyan: #00F0FF;
     }
 
-    if (matchMinute >= 90) {
-      running = false;
-      playWhistle();
-      logEvent(`Full Time! JJSC FC ${homeGoals} - ${awayGoals} ${awayNameEl.textContent}`);
-      return;
+    * {
+      box-sizing: border-box;
     }
 
-    updatePlayers(homePlayers, true);
-    updatePlayers(awayPlayers, false);
-
-    ball.x += ball.vx;
-    ball.y += ball.vy;
-    ball.vx *= 0.985;
-    ball.vy *= 0.985;
-
-    const topGoalY = H / 2 - goalH / 2;
-    const botGoalY = H / 2 + goalH / 2;
-
-    // Top / bottom touchlines
-    if (ball.y - ball.r < pad) {
-      ball.y = pad + ball.r;
-      ball.vy = Math.abs(ball.vy) * 0.85;
-    } else if (ball.y + ball.r > H - pad) {
-      ball.y = H - pad - ball.r;
-      ball.vy = -Math.abs(ball.vy) * 0.85;
+    body {
+      background-color: var(--navy-deep);
+      color: #F8FAFC;
+      font-family: 'Inter', sans-serif;
+      overflow-x: hidden;
+      padding-bottom: 92px; /* Space for persistent anthem mini-player */
+      transition: background-color 0.3s ease, color 0.3s ease;
     }
 
-    // Check goals vs goal-line bounces
-    const inGoalMouthY = ball.y > topGoalY && ball.y < botGoalY;
-    if (ball.x + ball.r >= W - pad) {
-      if (inGoalMouthY) {
-        homeGoals += 1;
-        scoreEl.textContent = `${homeGoals} - ${awayGoals}`;
-        playGoalHorn();
-        logEvent(`GOAL! JJSC FC score! (${homeGoals}-${awayGoals})`);
-        resetPositions("away");
-      } else {
-        ball.x = W - pad - ball.r;
-        ball.vx = -Math.abs(ball.vx) * 0.8;
-      }
-    } else if (ball.x - ball.r <= pad) {
-      if (inGoalMouthY) {
-        awayGoals += 1;
-        scoreEl.textContent = `${homeGoals} - ${awayGoals}`;
-        playGoalHorn();
-        logEvent(`Goal for ${awayNameEl.textContent} (${homeGoals}-${awayGoals})`);
-        resetPositions("home");
-      } else {
-        ball.x = pad + ball.r;
-        ball.vx = Math.abs(ball.vx) * 0.8;
-      }
+    /* Feature #8: High-Contrast / Light Stadium Mode */
+    body.jjsc-high-contrast {
+      background-color: #f1f5f9;
+      color: #050814;
     }
-  }
-
-  function drawPitch() {
-    ctx.fillStyle = "#14532d";
-    ctx.fillRect(0, 0, W, H);
-
-    // Subtle pitch stripes
-    const stripeCount = 8;
-    const stripeW = (W - pad * 2) / stripeCount;
-    for (let i = 0; i < stripeCount; i++) {
-      ctx.fillStyle = i % 2 === 0 ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.04)";
-      ctx.fillRect(pad + i * stripeW, pad, stripeW, H - pad * 2);
+    body.jjsc-high-contrast .glass-navy {
+      background: rgba(255, 255, 255, 0.94);
+      border-color: #14532d;
+      color: #050814;
+      box-shadow: 0 12px 30px rgba(5, 8, 20, 0.14);
+    }
+    body.jjsc-high-contrast .glass-dark {
+      background: rgba(248, 250, 252, 0.96);
+      border-color: rgba(20, 83, 45, 0.35);
+      color: #050814;
+    }
+    body.jjsc-high-contrast .text-white {
+      color: #050814 !important;
+    }
+    body.jjsc-high-contrast .text-slate-200,
+    body.jjsc-high-contrast .text-slate-300,
+    body.jjsc-high-contrast .text-slate-400 {
+      color: #1e293b !important;
+    }
+    body.jjsc-high-contrast .bg-navyDeep\/70,
+    body.jjsc-high-contrast .bg-navyDeep\/80,
+    body.jjsc-high-contrast .bg-navyDeep\/85,
+    body.jjsc-high-contrast .bg-navyDeep\/90,
+    body.jjsc-high-contrast .bg-navyDeep\/95,
+    body.jjsc-high-contrast .bg-navyDeep {
+      background-color: #e2e8f0 !important;
+      color: #050814 !important;
+    }
+    body.jjsc-high-contrast .gold-text-gradient {
+      background: linear-gradient(135deg, #14532d 0%, #b45309 60%, #854d0e 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
     }
 
-    ctx.strokeStyle = "rgba(255,255,255,0.75)";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(pad, pad, W - pad * 2, H - pad * 2);
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar {
+      width: 8px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #050918;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: linear-gradient(180deg, #F5C542, #14532d);
+      border-radius: 99px;
+    }
 
-    // Halfway line & center circle
-    ctx.beginPath();
-    ctx.moveTo(W / 2, pad);
-    ctx.lineTo(W / 2, H - pad);
-    ctx.stroke();
+    /* Preloader */
+    #preloader {
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      background: radial-gradient(circle at center, #0E193E 0%, #040714 100%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      transition: opacity 0.65s cubic-bezier(0.16, 1, 0.3, 1), visibility 0.65s ease;
+    }
+    #preloader.hidden-loader {
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+    }
+    .loader-progress {
+      width: 0%;
+      animation: fillLoader 1.25s cubic-bezier(0.65, 0, 0.35, 1) forwards;
+    }
+    @keyframes fillLoader {
+      0% { width: 0%; }
+      65% { width: 82%; }
+      100% { width: 100%; }
+    }
 
-    ctx.beginPath();
-    ctx.arc(W / 2, H / 2, 54, 0, Math.PI * 2);
-    ctx.stroke();
+    /* Stadium Grid Overlay */
+    .stadium-grid {
+      background-size: 56px 56px;
+      background-image:
+        linear-gradient(to right, rgba(245, 197, 66, 0.04) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(20, 83, 45, 0.08) 1px, transparent 1px);
+      mask-image: radial-gradient(ellipse at center, black 35%, transparent 82%);
+      -webkit-mask-image: radial-gradient(ellipse at center, black 35%, transparent 82%);
+    }
 
-    // Penalty boxes & goals
-    const boxW = 92;
-    const boxH = 190;
-    ctx.strokeRect(pad, H / 2 - boxH / 2, boxW, boxH);
-    ctx.strokeRect(W - pad - boxW, H / 2 - boxH / 2, boxW, boxH);
+    /* Glassmorphism Panels */
+    .glass-navy {
+      background: rgba(11, 20, 52, 0.78);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(245, 197, 66, 0.16);
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.55);
+    }
 
-    ctx.strokeStyle = "#facc15";
-    ctx.strokeRect(pad - goalDepth, H / 2 - goalH / 2, goalDepth, goalH);
-    ctx.strokeRect(W - pad, H / 2 - goalH / 2, goalDepth, goalH);
-  }
+    .glass-dark {
+      background: rgba(6, 11, 30, 0.86);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
 
-  function drawSquad(players, fill, stroke) {
-    players.forEach((p) => {
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-      ctx.fillStyle = p.label === "GK" ? "#f59e0b" : fill;
-      ctx.fill();
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = stroke;
-      ctx.stroke();
+    /* Kinetic Title Shimmer */
+    .gold-text-gradient {
+      background: linear-gradient(135deg, #FFF3B0 0%, #F5C542 45%, #D49B1A 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
 
-      ctx.fillStyle = "#ffffff";
-      ctx.font = "bold 9px sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(p.label, p.x, p.y);
-    });
-  }
+    /* Gold Primary Button */
+    .btn-gold {
+      background: linear-gradient(135deg, #FFE066 0%, #F5C542 55%, #D99B16 100%);
+      color: #050918;
+      box-shadow: 0 8px 28px rgba(245, 197, 66, 0.35);
+      transition: all 0.25s ease;
+    }
+    .btn-gold:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 12px 36px rgba(245, 197, 66, 0.58);
+    }
 
-  function render() {
-    stepSimulation();
-    drawPitch();
-    drawSquad(homePlayers, "#1d4ed8", "#93c5fd");
-    drawSquad(awayPlayers, "#dc2626", "#fca5a5");
+    /* Feature #2: 3D Crest Sanctum Interactive Stage */
+    .jjsc-crest-sanctum-stage {
+      perspective: 1100px;
+    }
+    .jjsc-crest-3d-card {
+      transform-style: preserve-3d;
+      transition: transform 0.25s ease-out, box-shadow 0.3s ease;
+      background: radial-gradient(circle at 30% 20%, rgba(20, 83, 45, 0.45), rgba(11, 17, 32, 0.92) 70%);
+    }
+    .jjsc-crest-3d-inner {
+      transform: translateZ(38px);
+    }
 
-    ctx.beginPath();
-    ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI * 2);
-    ctx.fillStyle = "#ffffff";
-    ctx.fill();
-    ctx.lineWidth = 1.5;
-    ctx.strokeStyle = "#111827";
-    ctx.stroke();
+    /* Marquee Ticker */
+    .marquee-track {
+      display: flex;
+      width: max-content;
+      animation: marqueeRun 32s linear infinite;
+    }
+    .marquee-track:hover {
+      animation-play-state: paused;
+    }
+    @keyframes marqueeRun {
+      0% { transform: translateX(0); }
+      100% { transform: translateX(-50%); }
+    }
 
-    requestAnimationFrame(render);
-  }
+    /* Equalizer Bars */
+    @keyframes eqBounce {
+      0%, 100% { transform: scaleY(0.25); }
+      50% { transform: scaleY(1); }
+    }
+    .eq-bar {
+      transform-origin: bottom;
+      animation: eqBounce 0.75s ease-in-out infinite;
+      animation-play-state: paused;
+    }
+    .eq-active .eq-bar {
+      animation-play-state: running;
+    }
 
-  fullReset();
-  render();
-})();
-      .jjsc-sim-section {
-  background: #0b1120;
-  color: #f8fafc;
-  border: 1px solid rgba(148, 163, 184, 0.25);
-  border-radius: 14px;
-  padding: 18px;
-  margin-top: 24px;
-  font-family: system-ui, -apple-system, sans-serif;
-}
+    /* 3D Jersey Flip */
+    .jersey-stage {
+      perspective: 1400px;
+    }
+    .jersey-flipper {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      transform-style: preserve-3d;
+      transition: transform 0.85s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+    .jersey-flipper.is-flipped {
+      transform: rotateY(180deg);
+    }
+    .jersey-face {
+      position: absolute;
+      inset: 0;
+      backface-visibility: hidden;
+      -webkit-backface-visibility: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .jersey-face.back {
+      transform: rotateY(180deg);
+    }
 
-.sim-header {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 14px;
-}
+    @keyframes floatKit {
+      0%, 100% { transform: translateY(0px); }
+      50% { transform: translateY(-8px); }
+    }
+    .animate-float-kit {
+      animation: floatKit 4.5s ease-in-out infinite;
+    }
 
-.sim-sub {
-  margin: 2px 0 0;
-  font-size: 0.85rem;
-  color: #94a3b8;
-}
+    /* 3D Tactical Pitch Perspective */
+    .tactical-viewport {
+      perspective: 1300px;
+    }
+    .tactical-pitch-3d {
+      transform-style: preserve-3d;
+      transition: transform 0.45s cubic-bezier(0.22, 1, 0.36, 1);
+      background:
+        repeating-linear-gradient(
+          0deg,
+          rgba(16, 112, 58, 0.94) 0px,
+          rgba(16, 112, 58, 0.94) 38px,
+          rgba(12, 92, 47, 0.96) 38px,
+          rgba(12, 92, 47, 0.96) 76px
+        );
+      box-shadow:
+        0 28px 60px rgba(0, 0, 0, 0.75),
+        inset 0 0 60px rgba(0, 0, 0, 0.45);
+    }
 
-.sim-scoreboard {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  background: #111827;
-  padding: 8px 14px;
-  border-radius: 10px;
-  border: 1px solid rgba(250, 204, 21, 0.35);
-}
+    .pitch-token {
+      touch-action: none;
+      user-select: none;
+      transition: box-shadow 0.2s ease, border-color 0.2s ease;
+    }
+    .pitch-token.dragging {
+      z-index: 40;
+      scale: 1.12;
+      box-shadow: 0 0 28px rgba(245, 197, 66, 0.85);
+    }
 
-.sim-clock {
-  background: #facc15;
-  color: #090d16;
-  font-weight: 700;
-  padding: 2px 8px;
-  border-radius: 6px;
-}
+    /* Moveable Squad Card Dragging State */
+    .squad-card.dragging-card {
+      opacity: 0.45;
+      border-color: #F5C542;
+      transform: scale(0.98);
+    }
+    .squad-card.drag-over-card {
+      border-color: #00F0FF;
+      box-shadow: 0 0 25px rgba(0, 240, 255, 0.35);
+    }
 
-.sim-controls {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-  margin-bottom: 14px;
-}
+    /* Wrong Password Shake */
+    @keyframes shakeError {
+      0%, 100% { transform: translateX(0); }
+      20%, 60% { transform: translateX(-8px); }
+      40%, 80% { transform: translateX(8px); }
+    }
+    .animate-shake {
+      animation: shakeError 0.4s ease-in-out;
+    }
 
-.sim-controls select,
-.sim-controls button {
-  background: #1e293b;
-  color: #f8fafc;
-  border: 1px solid #334155;
-  border-radius: 8px;
-  padding: 7px 11px;
-  font-size: 0.85rem;
-  cursor: pointer;
-}
+    /* Scroll Reveal */
+    .reveal {
+      opacity: 0;
+      transform: translateY(28px);
+      transition: opacity 0.75s cubic-bezier(0.16, 1, 0.3, 1), transform 0.75s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .reveal.active {
+      opacity: 1;
+      transform: translateY(0);
+    }
 
-.sim-controls button:hover {
-  border-color: #facc15;
-}
+    /* Stat Bar Fill */
+    .stat-bar-fill {
+      width: 0%;
+      transition: width 1.15s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+  </style>
+</head>
+<body class="antialiased selection:bg-champGold selection:text-navyDeep">
 
-.sim-stage {
-  display: grid;
-  grid-template-columns: 1fr 220px;
-  gap: 14px;
-}
+  <!-- =========================================================
+       CINEMATIC CLUB PRELOADER
+  ========================================================= -->
+  <div id="preloader">
+    <div class="flex flex-col items-center text-center px-4">
+      <div class="w-24 h-28 mb-4 drop-shadow-[0_0_28px_rgba(245,197,66,0.45)] animate-pulse">
+        <svg viewBox="0 0 200 235" class="w-full h-full">
+          <path d="M100 10 L182 36 V112 C182 166 146 205 100 225 C54 205 18 166 18 112 V36 Z" fill="#0E1C4D" stroke="#F5C542" stroke-width="7"/>
+          <path d="M100 18 L174 42 V111 C174 160 141 196 100 215 C59 196 26 160 26 111 V42 Z" fill="none" stroke="#FFE066" stroke-width="1.8" stroke-dasharray="4 3"/>
+          <path d="M84 54 A16 16 0 0 1 116 54 Z" fill="#F5C542"/>
+          <g stroke="#F5C542" stroke-width="2.5" stroke-linecap="round">
+            <line x1="100" y1="28" x2="100" y2="35"/><line x1="82" y1="33" x2="86" y2="39"/>
+            <line x1="118" y1="33" x2="114" y2="39"/><line x1="71" y1="45" x2="77" y2="48"/>
+            <line x1="129" y1="45" x2="123" y2="48"/>
+          </g>
+          <polygon points="62,40 55,52 62,52 57,63 69,49 62,49" fill="#F5C542"/>
+          <polygon points="138,40 131,52 138,52 133,63 145,49 138,49" fill="#F5C542"/>
+          <path d="M74 60 Q87 55 100 60 T126 60" fill="none" stroke="#F5C542" stroke-width="2.8" stroke-linecap="round"/>
+          <path d="M78 67 Q89 62 100 67 T122 67" fill="none" stroke="#F5C542" stroke-width="2.5" stroke-linecap="round"/>
+          <text x="100" y="96" text-anchor="middle" fill="#F5C542" font-family="Playfair Display, serif" font-style="italic" font-weight="800" font-size="25">JhonJhonia</text>
+          <text x="100" y="121" text-anchor="middle" fill="#F5C542" font-family="Teko, sans-serif" font-weight="700" font-size="26" letter-spacing="2">FC</text>
+          <path d="M96 132 C76 134 65 150 68 172 C74 164 81 163 85 167 C82 155 88 147 98 145 Z" fill="#F5C542"/>
+          <circle cx="110" cy="166" r="18" fill="#0E1C4D" stroke="#F5C542" stroke-width="3"/>
+          <polygon points="110,157 118,163 115,172 105,172 102,163" fill="none" stroke="#F5C542" stroke-width="2"/>
+          <g fill="#F5C542">
+            <circle cx="56" cy="176" r="2.5"/><circle cx="70" cy="188" r="2.8"/><circle cx="85" cy="197" r="3"/>
+            <circle cx="100" cy="202" r="3.8"/><circle cx="115" cy="197" r="3"/><circle cx="130" cy="188" r="2.8"/>
+            <circle cx="144" cy="176" r="2.5"/>
+          </g>
+        </svg>
+      </div>
+      <h2 class="font-display text-4xl sm:text-5xl tracking-[0.2em] text-white uppercase">
+        JJSC <span class="text-champGold">FC</span>
+      </h2>
+      <p class="font-tech text-xs tracking-[0.28em] text-champGold/80 uppercase mt-1 mb-4">
+        Jhonjhonia Jubo Sporting Club
+      </p>
+      <div class="w-60 sm:w-72 h-1.5 bg-white/10 rounded-full overflow-hidden">
+        <div class="h-full bg-gradient-to-r from-champGold via-neonLime to-neonCyan loader-progress rounded-full"></div>
+      </div>
+    </div>
+  </div>
 
-#jjscPitchCanvas {
-  width: 100%;
-  height: auto;
-  border-radius: 10px;
-  display: block;
-}
+  <!-- STADIUM EMBER PARTICLE CANVAS -->
+  <canvas id="stadiumCanvas" class="fixed inset-0 pointer-events-none z-0"></canvas>
+  <div class="fixed inset-0 stadium-grid pointer-events-none z-0"></div>
 
-.sim-events {
-  background: #111827;
-  border-radius: 10px;
-  padding: 12px;
-  max-height: 440px;
-  overflow-y: auto;
-}
+  <!-- =========================================================
+       FLOATING TOP NAVIGATION + FEATURE #8 THEME TOGGLE + FEATURE #9 MOBILE DRAWER
+  ========================================================= -->
+  <header class="fixed top-0 inset-x-0 z-50 px-3 sm:px-6 pt-3">
+    <nav class="max-w-7xl mx-auto glass-navy rounded-2xl px-4 sm:px-6 py-2.5 flex items-center justify-between gap-3">
+      <!-- Brand Identity -->
+      <a href="#home" class="flex items-center gap-3 group shrink-0">
+        <div class="w-11 h-12 shrink-0 transition-transform duration-300 group-hover:scale-105">
+          <svg viewBox="0 0 200 235" class="w-full h-full drop-shadow-[0_0_10px_rgba(245,197,66,0.4)]">
+            <path d="M100 10 L182 36 V112 C182 166 146 205 100 225 C54 205 18 166 18 112 V36 Z" fill="#0E1C4D" stroke="#F5C542" stroke-width="9"/>
+            <path d="M84 54 A16 16 0 0 1 116 54 Z" fill="#F5C542"/>
+            <path d="M74 63 Q87 58 100 63 T126 63" fill="none" stroke="#F5C542" stroke-width="4" stroke-linecap="round"/>
+            <text x="100" y="102" text-anchor="middle" fill="#F5C542" font-family="Playfair Display, serif" font-style="italic" font-weight="800" font-size="26">JhonJhonia</text>
+            <text x="100" y="130" text-anchor="middle" fill="#F5C542" font-family="Teko, sans-serif" font-weight="700" font-size="30" letter-spacing="2">FC</text>
+            <circle cx="106" cy="168" r="18" fill="#0E1C4D" stroke="#F5C542" stroke-width="4"/>
+            <path d="M92 138 C74 140 65 154 68 174 C74 167 80 166 84 169 Z" fill="#F5C542"/>
+          </svg>
+        </div>
+        <div>
+          <span class="font-display text-2xl sm:text-3xl font-bold tracking-wider text-white leading-none block">
+            JJSC <span class="text-champGold">FC</span>
+          </span>
+          <span class="font-tech text-[10px] tracking-[0.22em] text-slate-300 uppercase block">
+            Jhonjhonia Jubo Sporting Club
+          </span>
+        </div>
+      </a>
 
-.sim-events h3 {
-  margin: 0 0 8px;
-  font-size: 0.9rem;
-  color: #facc15;
-}
+      <!-- Desktop Menu -->
+      <div class="hidden xl:flex items-center gap-4 font-tech text-xs font-bold tracking-widest uppercase text-slate-200">
+        <a href="#club-heritage" class="hover:text-champGold transition-colors">Story & Rivals</a>
+        <a href="#club-anthem" class="hover:text-champGold transition-colors">Anthem</a>
+        <a href="#leaderboard" class="hover:text-champGold transition-colors">Leaderboard</a>
+        <a href="#squad-roster" class="hover:text-champGold transition-colors">Squad (12)</a>
+        <a href="#tactical-board" class="hover:text-champGold transition-colors">3D Tactics</a>
+        <a href="#jersey-store" class="hover:text-champGold transition-colors">Kit (৳520)</a>
+        <a href="#poster-studio" class="hover:text-champGold transition-colors">Card Studio</a>
+        <a href="#match-hub" class="hover:text-champGold transition-colors">Match Hub</a>
+      </div>
 
-#simEventList {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  font-size: 0.8rem;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  color: #cbd5e1;
-}
+      <!-- Quick Action Buttons -->
+      <div class="flex items-center gap-2">
+        <!-- Feature #8: Stadium Contrast Mode Toggle -->
+        <button type="button" id="jjscContrastToggle" class="px-2.5 py-2 rounded-xl bg-pitchGreen/40 hover:bg-pitchGreen/70 border border-champGold/35 font-tech text-xs font-bold uppercase tracking-wider text-champGold transition-all" title="Toggle Stadium High-Contrast / Light Mode">
+          ☀️ <span class="hidden md:inline" id="jjscContrastLabel">Stadium Light</span>
+        </button>
 
-@media (max-width: 780px) {
-  .sim-stage {
-    grid-template-columns: 1fr;
-  }
-}
+        <button type="button" onclick="toggleAnthemPlayback()" class="px-3 py-2 rounded-xl bg-neonCyan/15 hover:bg-neonCyan/25 border border-neonCyan/40 font-tech text-xs font-bold uppercase tracking-wider text-neonCyan flex items-center gap-1.5 transition-all" title="Play/Pause Club Anthem">
+          <span class="headerAnthemIcon">🎵</span>
+          <span class="hidden sm:inline headerAnthemLabel">Anthem</span>
+        </button>
+
+        <a href="#manager-console" id="navManagerBadge" class="hidden sm:flex px-3 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-champGold/30 font-tech text-xs font-bold uppercase tracking-wider text-champGold items-center gap-1.5 transition-all">
+          <span id="navLockIcon">🔒</span>
+          <span class="hidden md:inline">Manager</span>
+        </a>
+
+        <a href="#jersey-store" class="hidden sm:inline-block btn-gold font-tech font-bold text-xs uppercase tracking-wider px-3.5 py-2 rounded-xl">
+          Kit ৳520
+        </a>
+
+        <!-- Feature #9: Mobile Drawer Toggle Button -->
+        <button type="button" id="jjscMobileDrawerBtn" aria-label="Open Navigation Menu" class="xl:hidden px-3 py-2 rounded-xl bg-white/10 hover:bg-champGold hover:text-navyDeep border border-champGold/30 font-tech text-xs font-bold uppercase text-champGold transition-colors">
+          ☰ Menu
+        </button>
+      </div>
+    </nav>
+
+    <!-- Feature #9: Mobile Slide-Down Drawer Menu -->
+    <div id="jjscMobileDrawer" class="hidden xl:hidden max-w-7xl mx-auto mt-2 glass-navy rounded-2xl p-4 border border-champGold/35 shadow-2xl">
+      <div class="grid grid-cols-2 sm:grid-cols-3 gap-2 font-tech text-xs font-bold uppercase tracking-wider">
+        <a href="#home" class="jjsc-drawer-link p-2.5 rounded-xl bg-white/5 hover:bg-champGold hover:text-navyDeep text-white transition-colors">🏟️ Home Sanctum</a>
+        <a href="#club-heritage" class="jjsc-drawer-link p-2.5 rounded-xl bg-white/5 hover:bg-champGold hover:text-navyDeep text-white transition-colors">📜 Story & Rivals</a>
+        <a href="#club-anthem" class="jjsc-drawer-link p-2.5 rounded-xl bg-white/5 hover:bg-champGold hover:text-navyDeep text-white transition-colors">🎵 Club Anthem</a>
+        <a href="#leaderboard" class="jjsc-drawer-link p-2.5 rounded-xl bg-white/5 hover:bg-champGold hover:text-navyDeep text-white transition-colors">🏆 Leaderboard</a>
+        <a href="#squad-roster" class="jjsc-drawer-link p-2.5 rounded-xl bg-white/5 hover:bg-champGold hover:text-navyDeep text-white transition-colors">⚽ 12-Man Squad</a>
+        <a href="#tactical-board" class="jjsc-drawer-link p-2.5 rounded-xl bg-white/5 hover:bg-champGold hover:text-navyDeep text-white transition-colors">🎯 3D Tactics</a>
+        <a href="#jersey-store" class="jjsc-drawer-link p-2.5 rounded-xl bg-white/5 hover:bg-champGold hover:text-navyDeep text-white transition-colors">👕 Home Kit ৳520</a>
+        <a href="#poster-studio" class="jjsc-drawer-link p-2.5 rounded-xl bg-white/5 hover:bg-champGold hover:text-navyDeep text-white transition-colors">🖼️ Poster Studio</a>
+        <a href="#match-hub" class="jjsc-drawer-link p-2.5 rounded-xl bg-white/5 hover:bg-champGold hover:text-navyDeep text-white transition-colors">⚔️ Match Hub</a>
+        <a href="#leadership" class="jjsc-drawer-link p-2.5 rounded-xl bg-white/5 hover:bg-champGold hover:text-navyDeep text-white transition-colors">👑 Committee</a>
+        <a href="#manager-console" class="jjsc-drawer-link p-2.5 rounded-xl bg-champGold/20 text-champGold border border-champGold/40">🔒 Manager Console</a>
+      </div>
+    </div>
+  </header>
+
+  <!-- =========================================================
+       HERO SECTION — STADIUM ARENA (#1 & #2: 3D CREST SANCTUM)
+  ========================================================= -->
+  <section id="home" class="relative z-10 min-h-screen flex items-center pt-28 pb-16 px-4 sm:px-6">
+    <div class="max-w-7xl mx-auto w-full">
+      <div class="grid lg:grid-cols-12 gap-10 items-center">
+
+        <!-- Left Hero Copy -->
+        <div class="lg:col-span-7 text-center lg:text-left">
+          <div class="inline-flex items-center gap-2.5 px-4 py-1.5 rounded-full glass-navy border-champGold/40 mb-6">
+            <span class="w-2.5 h-2.5 rounded-full bg-champGold animate-ping"></span>
+            <span class="font-tech text-xs font-bold tracking-[0.22em] uppercase text-champGold">
+              Based in Jhonjhonia / Gopalganj • Official Club Portal
+            </span>
+          </div>
+
+          <h1 class="font-display font-bold text-6xl sm:text-8xl xl:text-9xl uppercase leading-[0.88] tracking-tight text-white mb-4">
+            JJSC <span class="gold-text-gradient">FC</span>
+            <span class="block text-3xl sm:text-5xl xl:text-6xl text-slate-200 tracking-wide mt-1">
+              JHONJHONIA JUBO SPORTING CLUB
+            </span>
+          </h1>
+
+          <p id="heroSloganDisplay" class="font-tech text-base sm:text-xl font-bold tracking-wider uppercase text-neonCyan mb-5">
+            "BORN IN JHONJHONIA. FORGED IN FIRE. UNSTOPPABLE ON THE PITCH."
+          </p>
+
+          <p class="text-slate-300 text-sm sm:text-base max-w-2xl mx-auto lg:mx-0 mb-6 leading-relaxed">
+            Led by Captain <strong class="text-champGold">Aariz (#17)</strong> and Manager <strong class="text-neonLime">Hamza (#47)</strong>. Explore our all-time dominance, 12-player squad wall with head-to-head comparison, 3D tactical board, rivalry records, and official Home Jersey.
+          </p>
+
+          <!-- Feature #1: Quick Jump Links Bar -->
+          <div class="flex flex-wrap items-center justify-center lg:justify-start gap-2 mb-6">
+            <a href="#club-heritage" class="px-3 py-1.5 rounded-xl bg-pitchGreen/40 hover:bg-pitchGreen/70 border border-champGold/30 font-tech text-xs font-bold uppercase tracking-wider text-champGold transition-colors">
+              📜 Story & Rivals
+            </a>
+            <a href="#squad-roster" class="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/15 border border-white/15 font-tech text-xs font-bold uppercase tracking-wider text-slate-200 transition-colors">
+              ⚽ 12-Player Squad
+            </a>
+            <a href="#leaderboard" class="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/15 border border-white/15 font-tech text-xs font-bold uppercase tracking-wider text-slate-200 transition-colors">
+              🏆 Golden Boot
+            </a>
+            <a href="#tactical-board" class="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/15 border border-white/15 font-tech text-xs font-bold uppercase tracking-wider text-slate-200 transition-colors">
+              🎯 3D Tactics
+            </a>
+          </div>
+
+          <!-- Primary Hero CTAs -->
+          <div class="flex flex-wrap items-center justify-center lg:justify-start gap-3.5">
+            <a href="#match-hub" class="btn-gold font-tech font-bold text-sm sm:text-base uppercase tracking-wider px-6 sm:px-7 py-3.5 rounded-2xl flex items-center gap-2">
+              <span>⚔️ Challenge for Match</span>
+            </a>
+            <a href="#jersey-store" class="glass-navy hover:border-champGold text-white font-tech font-bold text-sm sm:text-base uppercase tracking-wider px-6 sm:px-7 py-3.5 rounded-2xl transition-all hover:-translate-y-0.5 flex items-center gap-2">
+              <span>👕 Order Home Kit (৳<span class="heroPriceTag">520</span>)</span>
+            </a>
+            <button type="button" onclick="toggleAnthemPlayback()" class="glass-dark hover:border-neonLime text-neonLime font-tech font-bold text-sm sm:text-base uppercase tracking-wider px-5 sm:px-6 py-3.5 rounded-2xl transition-all flex items-center gap-2">
+              <span class="headerAnthemIcon">🎵</span>
+              <span class="headerAnthemLabel">Play Club Anthem</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Right Hero Showcase: Feature #2 Interactive 3D Crest Sanctum Card -->
+        <div class="lg:col-span-5 jjsc-crest-sanctum-stage">
+          <div id="jjscCrest3DCard" class="jjsc-crest-3d-card glass-navy rounded-3xl p-6 sm:p-8 border border-champGold/40 relative overflow-hidden cursor-grab active:cursor-grabbing">
+            <div class="absolute -top-24 -right-24 w-56 h-56 bg-champGold/15 blur-3xl rounded-full pointer-events-none"></div>
+            <div class="absolute -bottom-24 -left-24 w-56 h-56 bg-pitchGreen/50 blur-3xl rounded-full pointer-events-none"></div>
+
+            <div class="flex items-center justify-between mb-3">
+              <span class="px-3 py-1 rounded-full bg-champGold/15 border border-champGold/40 font-tech text-[10px] font-bold uppercase tracking-widest text-champGold">
+                3D Crest Sanctum
+              </span>
+              <button type="button" id="jjscCrestSpinBtn" class="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-champGold hover:text-navyDeep font-tech text-[10px] font-bold uppercase tracking-wider text-slate-200 transition-colors">
+                🔄 Spin 360°
+              </button>
+            </div>
+
+            <!-- Embroidered Crest Centerpiece -->
+            <div class="jjsc-crest-3d-inner flex flex-col items-center text-center mb-5">
+              <div id="jjscCrestSvgWrap" class="w-32 h-36 sm:w-36 sm:h-40 mb-3 drop-shadow-[0_14px_32px_rgba(245,197,66,0.45)] transition-transform duration-700">
+                <svg viewBox="0 0 200 235" class="w-full h-full">
+                  <path d="M100 10 L182 36 V112 C182 166 146 205 100 225 C54 205 18 166 18 112 V36 Z" fill="#0E1C4D" stroke="#F5C542" stroke-width="7"/>
+                  <path d="M100 18 L174 42 V111 C174 160 141 196 100 215 C59 196 26 160 26 111 V42 Z" fill="none" stroke="#FFE066" stroke-width="1.8" stroke-dasharray="4 3"/>
+                  <path d="M84 54 A16 16 0 0 1 116 54 Z" fill="#F5C542"/>
+                  <g stroke="#F5C542" stroke-width="2.5" stroke-linecap="round">
+                    <line x1="100" y1="28" x2="100" y2="35"/><line x1="82" y1="33" x2="86" y2="39"/>
+                    <line x1="118" y1="33" x2="114" y2="39"/><line x1="71" y1="45" x2="77" y2="48"/>
+                    <line x1="129" y1="45" x2="123" y2="48"/>
+                  </g>
+                  <polygon points="62,40 55,52 62,52 57,63 69,49 62,49" fill="#F5C542"/>
+                  <polygon points="138,40 131,52 138,52 133,63 145,49 138,49" fill="#F5C542"/>
+                  <path d="M74 60 Q87 55 100 60 T126 60" fill="none" stroke="#F5C542" stroke-width="2.8" stroke-linecap="round"/>
+                  <path d="M78 67 Q89 62 100 67 T122 67" fill="none" stroke="#F5C542" stroke-width="2.5" stroke-linecap="round"/>
+                  <text x="100" y="96" text-anchor="middle" fill="#F5C542" font-family="Playfair Display, serif" font-style="italic" font-weight="800" font-size="25">JhonJhonia</text>
+                  <text x="100" y="121" text-anchor="middle" fill="#F5C542" font-family="Teko, sans-serif" font-weight="700" font-size="26" letter-spacing="2">FC</text>
+                  <path d="M96 132 C76 134 65 150 68 172 C74 164 81 163 85 167 C82 155 88 147 98 145 Z" fill="#F5C542"/>
+                  <circle cx="110" cy="166" r="18" fill="#0E1C4D" stroke="#F5C542" stroke-width="3"/>
+                  <polygon points="110,157 118,163 115,172 105,172 102,163" fill="none" stroke="#F5C542" stroke-width="2"/>
+                  <g fill="#F5C542">
+                    <circle cx="56" cy="176" r="2.5"/><circle cx="70" cy="188" r="2.8"/><circle cx="85" cy="197" r="3"/>
+                    <circle cx="100" cy="202" r="3.8"/><circle cx="115" cy="197" r="3"/><circle cx="130" cy="188" r="2.8"/>
+                    <circle cx="144" cy="176" r="2.5"/>
+                  </g>
+                </svg>
+              </div>
+              <p id="jjscCrestLoreText" class="font-tech text-[11px] uppercase tracking-widest text-slate-300">
+                Move cursor over crest to tilt • 7 Stars = Unity & Victory
+              </p>
+            </div>
+
+            <!-- Live Dynamic Totals -->
+            <div class="grid grid-cols-3 gap-3 pt-5 border-t border-white/10 text-center">
+              <div class="p-3 rounded-2xl bg-navyDeep/70 border border-white/5">
+                <span id="heroTotalGoals" class="font-display text-4xl font-bold text-neonLime block leading-none">257</span>
+                <span class="font-tech text-[10px] uppercase tracking-widest text-slate-400 mt-1 block">Club Goals</span>
+              </div>
+              <div class="p-3 rounded-2xl bg-navyDeep/70 border border-white/5">
+                <span id="heroTotalAssists" class="font-display text-4xl font-bold text-neonCyan block leading-none">277</span>
+                <span class="font-tech text-[10px] uppercase tracking-widest text-slate-400 mt-1 block">Club Assists</span>
+              </div>
+              <div class="p-3 rounded-2xl bg-navyDeep/70 border border-white/5">
+                <span id="heroSquadCount" class="font-display text-4xl font-bold text-champGold block leading-none">12</span>
+                <span class="font-tech text-[10px] uppercase tracking-widest text-slate-400 mt-1 block">Active Squad</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- LIVE CLUB TICKER -->
+  <div class="relative z-10 border-y border-champGold/20 bg-navyBase/90 backdrop-blur-md py-3 overflow-hidden">
+    <div class="marquee-track flex items-center gap-10 font-tech text-xs sm:text-sm font-bold uppercase tracking-wider">
+      <div class="flex items-center gap-2.5 text-champGold">
+        <span class="px-2 py-0.5 bg-champGold text-navyDeep rounded text-[11px]">CAPTAIN</span>
+        <span>AARIZ (#17) LEADS JJSC FC WITH 92 ALL-TIME ASSISTS & 111 G+A</span>
+      </div>
+      <span class="text-slate-600">◆</span>
+      <div class="flex items-center gap-2.5 text-neonLime">
+        <span class="px-2 py-0.5 bg-neonLime text-navyDeep rounded text-[11px]">TOP SCORER</span>
+        <span>MANAGER HAMZA (#47) DOMINATES WITH 68 CAREER GOALS</span>
+      </div>
+      <span class="text-slate-600">◆</span>
+      <div class="flex items-center gap-2.5 text-neonCyan">
+        <span class="px-2 py-0.5 bg-neonCyan text-navyDeep rounded text-[11px]">RIVALRIES</span>
+        <span>UNBEATEN SPIRIT VS ROYAL FC, JHONJHONIA FC, ADAMJEE BLACKOUTS & 3 BROS</span>
+      </div>
+      <span class="text-slate-600">◆</span>
+      <div class="flex items-center gap-2.5 text-white">
+        <span class="px-2 py-0.5 bg-pitchGreen text-champGold border border-champGold/40 rounded text-[11px]">MATCHES</span>
+        <span>OPEN FOR 11v11, 7v7, 6v6 & 4v4 VICTORY LEAGUE CHALLENGES • WHATSAPP +880 1925-114987</span>
+      </div>
+      <span class="text-slate-600">◆</span>
+      <div class="flex items-center gap-2.5 text-champGold">
+        <span class="px-2 py-0.5 bg-champGold text-navyDeep rounded text-[11px]">CAPTAIN</span>
+        <span>AARIZ (#17) LEADS JJSC FC WITH 92 ALL-TIME ASSISTS & 111 G+A</span>
+      </div>
+      <span class="text-slate-600">◆</span>
+      <div class="flex items-center gap-2.5 text-neonLime">
+        <span class="px-2 py-0.5 bg-neonLime text-navyDeep rounded text-[11px]">TOP SCORER</span>
+        <span>MANAGER HAMZA (#47) DOMINATES WITH 68 CAREER GOALS</span>
+      </div>
+      <span class="text-slate-600">◆</span>
+    </div>
+  </div>
+
+  <!-- =========================================================
+       NEW SECTION: FEATURES #4, #5 & #6 — CLUB STORY, TIMELINE & RIVAL CLUB PROFILES
+  ========================================================= -->
+  <section id="club-heritage" class="relative z-10 py-24 px-4 sm:px-6 bg-gradient-to-b from-transparent via-pitchGreen/15 to-transparent">
+    <div class="max-w-7xl mx-auto space-y-16 reveal">
+
+      <!-- Feature #4: Club Story, Motto & Founding Season Timeline -->
+      <div>
+        <div class="flex flex-col lg:flex-row lg:items-end justify-between gap-6 mb-10">
+          <div>
+            <span class="font-tech text-xs sm:text-sm font-bold tracking-[0.25em] uppercase text-champGold block mb-2">
+              Heritage & Brotherhood • Est. Jhonjhonia
+            </span>
+            <h2 class="font-display text-5xl sm:text-7xl font-bold uppercase text-white leading-none">
+              CLUB STORY & <span class="gold-text-gradient">FOUNDING TIMELINE</span>
+            </h2>
+          </div>
+          <div class="px-4 py-2.5 rounded-2xl glass-navy border border-champGold/40 font-tech text-xs font-bold uppercase tracking-widest text-champGold">
+            Motto: "Unity on Grass, Honor in Victory"
+          </div>
+        </div>
+
+        <div class="grid lg:grid-cols-12 gap-6 items-stretch">
+          <div class="lg:col-span-5 glass-navy rounded-3xl p-6 sm:p-8 border border-champGold/30 flex flex-col justify-between">
+            <div>
+              <span class="px-3 py-1 rounded-full bg-pitchGreen/60 border border-champGold/40 font-tech text-[10px] font-bold uppercase tracking-widest text-champGold">
+                The Jhonjhonia Story
+              </span>
+              <h3 class="font-display text-4xl font-bold uppercase text-white mt-4 mb-3">
+                FROM LOCAL TURF TO CHAMPIONSHIP PEDIGREE
+              </h3>
+              <p class="text-sm text-slate-300 leading-relaxed mb-4">
+                Founded by passionate youth footballers in <strong class="text-champGold">Jhonjhonia & Gopalganj</strong>, Jhonjhonia Jubo Sporting Club (JJSC FC) united twelve core brothers under President <strong class="text-white">Meherun Nesa</strong>, Captain <strong class="text-champGold">Aariz (#17)</strong>, and Manager <strong class="text-neonLime">Hamza (#47)</strong>.
+              </p>
+              <p class="text-sm text-slate-300 leading-relaxed">
+                Known for rapid one-touch passing, fearless pressing, and royal-navy-and-gold pride, JJSC FC dominates local 11v11, 7v7, 6v6, and 4v4 Victory League arenas.
+              </p>
+            </div>
+            <div class="mt-6 pt-4 border-t border-white/10 flex items-center justify-between font-tech text-xs text-slate-300">
+              <span>Home Turf: <strong class="text-white">Jhonjhonia Arena</strong></span>
+              <span>Colors: <strong class="text-champGold">Navy • Pitch Green • Gold</strong></span>
+            </div>
+          </div>
+
+          <!-- Founding Season Milestones -->
+          <div class="lg:col-span-7 grid sm:grid-cols-2 gap-4">
+            <div class="glass-dark rounded-3xl p-5 border border-champGold/30">
+              <span class="font-tech text-xs font-bold uppercase tracking-widest text-champGold">Chapter 01 • Foundation</span>
+              <h4 class="font-display text-3xl font-bold uppercase text-white mt-1">THE JHONJHONIA PACT</h4>
+              <p class="text-xs sm:text-sm text-slate-300 mt-2 leading-relaxed">
+                Aariz (#17), Hamza (#47), and Nafiz (#7) assemble the original 12-player brotherhood and adopt the JhonJhonia FC rising-sun shield crest.
+              </p>
+            </div>
+            <div class="glass-dark rounded-3xl p-5 border border-neonCyan/30">
+              <span class="font-tech text-xs font-bold uppercase tracking-widest text-neonCyan">Chapter 02 • Derby Dominance</span>
+              <h4 class="font-display text-3xl font-bold uppercase text-white mt-1">CONQUERING LOCAL RIVALS</h4>
+              <p class="text-xs sm:text-sm text-slate-300 mt-2 leading-relaxed">
+                Statement derby triumphs against Royal FC, JhonJhonia FC, Adamjee Blackouts, and 3 Bros cement JJSC FC as the region's premier club.
+              </p>
+            </div>
+            <div class="glass-dark rounded-3xl p-5 border border-neonLime/30">
+              <span class="font-tech text-xs font-bold uppercase tracking-widest text-neonLime">Chapter 03 • 500+ G+A Era</span>
+              <h4 class="font-display text-3xl font-bold uppercase text-white mt-1">CENTURY MILESTONES</h4>
+              <p class="text-xs sm:text-sm text-slate-300 mt-2 leading-relaxed">
+                Captain Aariz surpasses 90+ assists while Manager Hamza crosses 65+ career goals, driving the club past 530 combined goal contributions.
+              </p>
+            </div>
+            <div class="glass-dark rounded-3xl p-5 border border-champGold/30">
+              <span class="font-tech text-xs font-bold uppercase tracking-widest text-champGold">Chapter 04 • 2026 Digital Arena</span>
+              <h4 class="font-display text-3xl font-bold uppercase text-white mt-1">VICTORY LEAGUE & 2026 KIT</h4>
+              <p class="text-xs sm:text-sm text-slate-300 mt-2 leading-relaxed">
+                Launch of the official Royal Navy calligraphic Home Kit (৳520), custom club anthem, and 3D tactical command portal.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Features #5 & #6: Rival Club Profiles & Quick Head-to-Head Summary Cards -->
+      <div>
+        <div class="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-8">
+          <div>
+            <span class="font-tech text-xs sm:text-sm font-bold tracking-[0.25em] uppercase text-neonCyan block mb-2">
+              Derby Dossiers • Head-to-Head Records
+            </span>
+            <h3 class="font-display text-4xl sm:text-6xl font-bold uppercase text-white leading-none">
+              RIVAL CLUBS & <span class="gold-text-gradient">H2H SUMMARY</span>
+            </h3>
+          </div>
+          <div id="jjscH2HOverallBadge" class="px-4 py-2 rounded-xl bg-pitchGreen/50 border border-champGold/40 font-tech text-xs font-bold uppercase tracking-wider text-champGold">
+            Overall Derby Record: 14W - 3D - 3L
+          </div>
+        </div>
+
+        <div id="jjscRivalsGrid" class="grid sm:grid-cols-2 lg:grid-cols-4 gap-5">
+          <!-- Populated cleanly via JS -->
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- =========================================================
+       SECTION 0: JJSC FC CLUB ANTHEM / OFFICIAL TRACK PLAYER
+  ========================================================= -->
+  <section id="club-anthem" class="relative z-10 py-24 px-4 sm:px-6">
+    <div class="max-w-7xl mx-auto reveal">
+      <div class="flex flex-col lg:flex-row lg:items-end justify-between gap-6 mb-10">
+        <div>
+          <span class="font-tech text-xs sm:text-sm font-bold tracking-[0.25em] uppercase text-neonCyan block mb-2">
+            Official Stadium Soundtrack • Jhonjhonia & Gopalganj
+          </span>
+          <h2 class="font-display text-5xl sm:text-7xl font-bold uppercase text-white leading-none">
+            JJSC FC <span class="gold-text-gradient">CLUB ANTHEM</span> PLAYER
+          </h2>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-2">
+          <span id="anthemEngineBadge" class="px-3.5 py-1.5 rounded-xl bg-champGold/15 border border-champGold/40 font-tech text-xs font-bold uppercase tracking-wider text-champGold">
+            🔊 Stadium Synth Beat Ready
+          </span>
+        </div>
+      </div>
+
+      <div class="grid lg:grid-cols-12 gap-8 items-start">
+        <div class="lg:col-span-7 glass-navy rounded-3xl p-6 sm:p-8 border border-champGold/30 space-y-6">
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-white/10 pb-5">
+            <div class="flex items-center gap-4">
+              <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-royalBlue via-navyCard to-champGold/30 border border-champGold/50 flex items-center justify-center shrink-0 shadow-lg">
+                <span class="font-display text-3xl font-bold text-champGold">JJ</span>
+              </div>
+              <div>
+                <span id="anthemArtistDisplay" class="font-tech text-xs font-bold uppercase tracking-widest text-neonCyan block">
+                  JJSC FC Official Anthem • Jhonjhonia / Gopalganj
+                </span>
+                <h3 id="anthemTitleDisplay" class="font-display text-3xl sm:text-4xl font-bold uppercase text-white leading-none mt-0.5">
+                  JJSC FC — WE ARE THE CHAMPIONS
+                </h3>
+              </div>
+            </div>
+
+            <div id="anthemEqualizer" class="flex items-end gap-1.5 h-10 px-3 py-2 rounded-xl bg-navyDeep/80 border border-white/10 self-start sm:self-auto">
+              <span class="eq-bar w-1.5 h-full rounded-full bg-champGold" style="animation-delay: 0s;"></span>
+              <span class="eq-bar w-1.5 h-full rounded-full bg-neonLime" style="animation-delay: 0.14s;"></span>
+              <span class="eq-bar w-1.5 h-full rounded-full bg-neonCyan" style="animation-delay: 0.28s;"></span>
+              <span class="eq-bar w-1.5 h-full rounded-full bg-champGold" style="animation-delay: 0.42s;"></span>
+              <span class="eq-bar w-1.5 h-full rounded-full bg-neonLime" style="animation-delay: 0.18s;"></span>
+              <span class="eq-bar w-1.5 h-full rounded-full bg-neonCyan" style="animation-delay: 0.34s;"></span>
+            </div>
+          </div>
+
+          <div class="space-y-4">
+            <div class="flex flex-wrap items-center justify-between gap-4">
+              <div class="flex items-center gap-3">
+                <button type="button" onclick="toggleAnthemPlayback()" class="btn-gold px-6 py-3 rounded-2xl font-tech text-sm font-bold uppercase tracking-wider flex items-center gap-2">
+                  <span class="headerAnthemIcon">▶</span>
+                  <span class="headerAnthemLabel">Play Anthem</span>
+                </button>
+                <button type="button" onclick="restartAnthemPlayback()" class="px-4 py-3 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/15 font-tech text-xs font-bold uppercase tracking-wider text-slate-200 transition-colors">
+                  ↺ Restart
+                </button>
+              </div>
+
+              <div class="flex items-center gap-2.5 bg-navyDeep/80 px-3.5 py-2 rounded-xl border border-white/10">
+                <button type="button" onclick="toggleAnthemMute()" id="anthemMuteBtn" class="font-tech text-xs font-bold uppercase text-champGold">
+                  🔊
+                </button>
+                <input id="anthemVolumeSlider" type="range" min="0" max="100" value="80" oninput="updateAnthemVolume(this.value)" class="w-24 accent-champGold cursor-pointer" />
+                <span id="anthemVolumeLabel" class="font-tech text-xs text-slate-300 w-9 text-right">80%</span>
+              </div>
+            </div>
+
+            <div>
+              <input id="anthemSeekSlider" type="range" min="0" max="1000" value="0" oninput="seekAnthem(this.value)" class="w-full accent-neonCyan cursor-pointer" />
+              <div class="flex items-center justify-between font-tech text-xs text-slate-400 mt-1">
+                <span id="anthemCurrentTime">0:00</span>
+                <span id="anthemDurationTime">0:45</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="pt-4 border-t border-white/10 space-y-4">
+            <div>
+              <label for="anthemUrlInput" class="block font-tech text-xs font-bold uppercase tracking-widest text-champGold mb-1.5">
+                Load Official Song URL (.mp3 / .wav / GitHub Raw Link)
+              </label>
+              <div class="flex flex-col sm:flex-row gap-2.5">
+                <input id="anthemUrlInput" type="url" placeholder="https://raw.githubusercontent.com/.../jjsc-anthem.mp3"
+                  class="flex-1 px-4 py-2.5 rounded-xl bg-navyDeep/85 border border-white/15 focus:border-champGold focus:outline-none text-xs sm:text-sm text-white" />
+                <button type="button" onclick="loadAnthemFromUrlInput()" class="px-4 py-2.5 rounded-xl bg-neonCyan text-navyDeep font-tech text-xs font-bold uppercase tracking-wider hover:opacity-95 transition-all shrink-0">
+                  Load Track URL
+                </button>
+              </div>
+            </div>
+
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-navyDeep/70 p-3.5 rounded-2xl border border-white/10">
+              <div>
+                <span class="font-tech text-xs font-bold uppercase tracking-wider text-white block">
+                  Test Local Audio File from Device
+                </span>
+                <span class="text-xs text-slate-400">
+                  Pick your club audio file (.mp3, .wav, .ogg) to play immediately in this browser.
+                </span>
+              </div>
+              <label class="px-4 py-2 rounded-xl bg-white/10 hover:bg-champGold hover:text-navyDeep font-tech text-xs font-bold uppercase tracking-wider text-champGold cursor-pointer transition-colors shrink-0 text-center">
+                📁 Choose Audio File
+                <input id="anthemFilePicker" type="file" accept="audio/*" onchange="handleLocalAnthemFile(event)" class="hidden" />
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="lg:col-span-5 glass-navy rounded-3xl p-6 sm:p-8 border border-neonCyan/30 space-y-4">
+          <div class="flex items-center justify-between border-b border-white/10 pb-3">
+            <h3 class="font-display text-3xl font-bold uppercase text-white">ANTHEM LYRICS & CALLOUTS</h3>
+            <span class="px-2.5 py-0.5 rounded bg-neonLime/15 text-neonLime font-tech text-[10px] font-bold uppercase">
+              STADIUM CHANT
+            </span>
+          </div>
+
+          <div id="anthemLyricsBox" class="space-y-2.5 max-h-[340px] overflow-y-auto pr-1 text-sm">
+            <div data-lyric-idx="0" class="lyric-line p-3 rounded-xl bg-navyDeep/70 border border-champGold/40 text-champGold font-tech font-bold uppercase tracking-wide">
+              🔥 "JJSC FC WE ARE THE CHAMPIONS — JHONJHONIA & GOPALGANJ RISING!"
+            </div>
+            <div data-lyric-idx="1" class="lyric-line p-3 rounded-xl bg-navyDeep/50 border border-white/5 text-slate-200">
+              👑 <strong class="text-champGold">Aariz (#17)</strong> Captain & Organiser • <strong class="text-neonLime">Hamza (#47)</strong> Manager & Top Striker!
+            </div>
+            <div data-lyric-idx="2" class="lyric-line p-3 rounded-xl bg-navyDeep/50 border border-white/5 text-slate-200">
+              ⚡ <strong class="text-white">Bayjid (#10)</strong> on the wing, <strong class="text-white">Arafat (#23)</strong> in attack, <strong class="text-white">Nafiz (#7)</strong> locking the midfield!
+            </div>
+            <div data-lyric-idx="3" class="lyric-line p-3 rounded-xl bg-navyDeep/50 border border-white/5 text-slate-200">
+              🛡️ Backed by President <strong class="text-champGold">Meherun Nesa</strong> & Club Partners <strong class="text-neonCyan">Arshiya Hassan, Tarik Hassan & Amjad Hossain</strong>!
+            </div>
+            <div data-lyric-idx="4" class="lyric-line p-3 rounded-xl bg-navyDeep/50 border border-white/5 text-slate-200">
+              🏆 Royal Navy, Gold & White — We Never Back Down on Any Pitch!
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- =========================================================
+       SECTION 1: HALL OF DOMINANCE — ALL-TIME CLUB LEADERBOARD
+  ========================================================= -->
+  <section id="leaderboard" class="relative z-10 py-24 px-4 sm:px-6">
+    <div class="max-w-7xl mx-auto">
+      <div class="flex flex-col lg:flex-row lg:items-end justify-between gap-6 mb-12 reveal">
+        <div>
+          <span class="font-tech text-xs sm:text-sm font-bold tracking-[0.25em] uppercase text-neonLime block mb-2">
+            Hall of Dominance
+          </span>
+          <h2 class="font-display text-5xl sm:text-7xl font-bold uppercase text-white leading-none">
+            ALL-TIME CLUB <br class="sm:hidden" />
+            <span class="text-transparent bg-clip-text bg-gradient-to-r from-neonLime via-champGold to-neonCyan">LEADERBOARD</span>
+          </h2>
+        </div>
+
+        <div class="glass-dark p-1.5 rounded-2xl inline-flex flex-wrap gap-1 border border-white/10 self-start lg:self-end">
+          <button id="lb-tab-scorers" onclick="setLeaderboardMode('scorers')" class="px-4 sm:px-5 py-2.5 rounded-xl font-tech text-xs sm:text-sm font-bold uppercase tracking-wider transition-all text-slate-300 hover:text-white">
+            ⚽ TOP SCORERS
+          </button>
+          <button id="lb-tab-assisters" onclick="setLeaderboardMode('assisters')" class="px-4 sm:px-5 py-2.5 rounded-xl font-tech text-xs sm:text-sm font-bold uppercase tracking-wider transition-all text-slate-300 hover:text-white">
+            🎯 TOP ASSISTERS
+          </button>
+          <button id="lb-tab-combined" onclick="setLeaderboardMode('combined')" class="px-4 sm:px-5 py-2.5 rounded-xl font-tech text-xs sm:text-sm font-bold uppercase tracking-wider transition-all bg-neonLime text-navyDeep shadow-lg">
+            🔥 G+A IMPACT
+          </button>
+        </div>
+      </div>
+
+      <div id="leaderboardGrid" class="grid md:grid-cols-2 gap-6 reveal">
+        <!-- Dynamically rendered via JS -->
+      </div>
+    </div>
+  </section>
+
+  <!-- =========================================================
+       SECTION 2: ENHANCED 12-PLAYER SQUAD WALL (FEATURES #11–#20)
+  ========================================================= -->
+  <section id="squad-roster" class="relative z-10 py-24 px-4 sm:px-6 bg-gradient-to-b from-transparent via-navyBase/70 to-transparent">
+    <div class="max-w-7xl mx-auto">
+      <div class="flex flex-col lg:flex-row lg:items-end justify-between gap-6 mb-8 reveal">
+        <div>
+          <span class="font-tech text-xs sm:text-sm font-bold tracking-[0.25em] uppercase text-champGold block mb-2">
+            12-Player Squad Wall • Filter, Search, Compare & Fitness Status
+          </span>
+          <h2 class="font-display text-5xl sm:text-7xl font-bold uppercase text-white leading-none">
+            THE 12-MAN <span class="gold-text-gradient">JJSC SQUAD</span>
+          </h2>
+          <p class="text-slate-300 text-sm mt-2 max-w-2xl">
+            Filter by position, search by name or kit #, toggle fitness availability, or compare any two JJSC FC players side-by-side.
+          </p>
+        </div>
+
+        <!-- Feature #13: Player Search + Feature #20: Reset Lineup -->
+        <div class="flex flex-wrap items-center gap-2.5">
+          <input id="jjscSquadSearchInput" type="search" placeholder="Search player or #kit..." class="glass-navy px-4 py-2.5 rounded-xl font-tech text-xs font-bold text-white border border-champGold/30 focus:border-champGold focus:outline-none w-48 sm:w-56" />
+          <button onclick="resetSquadOrder()" class="glass-dark hover:border-champGold px-4 py-2.5 rounded-xl font-tech text-xs font-bold uppercase tracking-wider text-slate-300 hover:text-champGold transition-colors">
+            Reset Lineup
+          </button>
+        </div>
+      </div>
+
+      <!-- Feature #12: Position Filter Tabs (All, GK, DEF, MID, FWD, SUB) -->
+      <div class="flex flex-wrap items-center justify-between gap-4 mb-6 reveal">
+        <div id="jjscPositionTabs" class="glass-dark p-1.5 rounded-2xl inline-flex flex-wrap gap-1 border border-white/10">
+          <button type="button" data-pos-tab="ALL" class="jjsc-pos-tab px-4 py-2 rounded-xl font-tech text-xs font-bold uppercase tracking-wider bg-champGold text-navyDeep">All (12)</button>
+          <button type="button" data-pos-tab="GK" class="jjsc-pos-tab px-4 py-2 rounded-xl font-tech text-xs font-bold uppercase tracking-wider text-slate-300 hover:text-white">GK</button>
+          <button type="button" data-pos-tab="DEF" class="jjsc-pos-tab px-4 py-2 rounded-xl font-tech text-xs font-bold uppercase tracking-wider text-slate-300 hover:text-white">DEF</button>
+          <button type="button" data-pos-tab="MID" class="jjsc-pos-tab px-4 py-2 rounded-xl font-tech text-xs font-bold uppercase tracking-wider text-slate-300 hover:text-white">MID</button>
+          <button type="button" data-pos-tab="FWD" class="jjsc-pos-tab px-4 py-2 rounded-xl font-tech text-xs font-bold uppercase tracking-wider text-slate-300 hover:text-white">FWD</button>
+          <button type="button" data-pos-tab="SUB" class="jjsc-pos-tab px-4 py-2 rounded-xl font-tech text-xs font-bold uppercase tracking-wider text-slate-300 hover:text-white">SUB</button>
+        </div>
+
+        <!-- Hidden select kept synced for backwards compatibility -->
+        <select id="squadRoleFilter" onchange="renderSquadCards()" class="hidden">
+          <option value="ALL">ALL</option>
+        </select>
+
+        <div class="font-tech text-xs text-slate-300 flex items-center gap-3">
+          <span><strong class="text-champGold">C</strong> = Captain (Aariz #17)</span>
+          <span><strong class="text-neonCyan">VC</strong> = Vice-Captain (Hamza #47)</span>
+        </div>
+      </div>
+
+      <!-- Feature #18: Side-by-Side Player Comparison Panel -->
+      <div class="glass-navy rounded-3xl p-5 sm:p-6 border border-neonCyan/30 mb-8 reveal">
+        <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
+          <div>
+            <span class="font-tech text-[10px] font-bold uppercase tracking-widest text-neonCyan">Head-to-Head Scouting</span>
+            <h3 class="font-display text-3xl font-bold uppercase text-white leading-none">SIDE-BY-SIDE PLAYER COMPARISON</h3>
+          </div>
+          <div class="flex flex-wrap items-center gap-2.5">
+            <select id="jjscComparePlayerA" class="px-3.5 py-2 rounded-xl bg-navyDeep border border-champGold/40 font-tech text-xs font-bold uppercase text-champGold focus:outline-none"></select>
+            <span class="font-display text-2xl font-bold text-slate-400">VS</span>
+            <select id="jjscComparePlayerB" class="px-3.5 py-2 rounded-xl bg-navyDeep border border-neonCyan/40 font-tech text-xs font-bold uppercase text-neonCyan focus:outline-none"></select>
+          </div>
+        </div>
+        <div id="jjscPlayerCompareResult" class="grid sm:grid-cols-3 gap-4 items-center bg-navyDeep/75 rounded-2xl p-4 border border-white/10">
+          <!-- Populated dynamically -->
+        </div>
+      </div>
+
+      <!-- Moveable Player Cards Grid -->
+      <div id="moveableSquadGrid" class="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5 reveal">
+        <!-- Populated dynamically via JS -->
+      </div>
+    </div>
+  </section>
+
+  <!-- =========================================================
+       SECTION 3: ERROR-FREE 3D TACTICAL BOARD + VICTORY LEAGUE
+  ========================================================= -->
+  <section id="tactical-board" class="relative z-10 py-24 px-4 sm:px-6">
+    <div class="max-w-7xl mx-auto">
+      <div class="flex flex-col lg:flex-row lg:items-end justify-between gap-6 mb-10 reveal">
+        <div>
+          <span class="font-tech text-xs sm:text-sm font-bold tracking-[0.25em] uppercase text-neonCyan block mb-2">
+            JJSC FC Strategy Room
+          </span>
+          <h2 class="font-display text-5xl sm:text-7xl font-bold uppercase text-white leading-none">
+            3D TACTICAL <span class="text-neonCyan">BOARD</span> & <span class="gold-text-gradient">VICTORY LEAGUE</span>
+          </h2>
+        </div>
+
+        <div class="glass-navy p-1.5 rounded-2xl inline-flex flex-wrap gap-1.5 border border-champGold/25">
+          <button onclick="setTacticalFormat('11v11')" id="fmt-11v11" class="fmt-btn px-4 py-2.5 rounded-xl font-tech text-xs font-bold uppercase tracking-wider transition-all bg-champGold text-navyDeep">
+            11v11 Full (1 Sub)
+          </button>
+          <button onclick="setTacticalFormat('7v7')" id="fmt-7v7" class="fmt-btn px-4 py-2.5 rounded-xl font-tech text-xs font-bold uppercase tracking-wider transition-all text-slate-300 hover:text-white">
+            7v7 Turf
+          </button>
+          <button onclick="setTacticalFormat('6v6')" id="fmt-6v6" class="fmt-btn px-4 py-2.5 rounded-xl font-tech text-xs font-bold uppercase tracking-wider transition-all text-slate-300 hover:text-white">
+            6v6 Arena
+          </button>
+          <button onclick="setTacticalFormat('4v4')" id="fmt-4v4" class="fmt-btn px-4 py-2.5 rounded-xl font-tech text-xs font-bold uppercase tracking-wider transition-all text-slate-300 hover:text-white">
+            🏆 4v4 Victory League
+          </button>
+        </div>
+      </div>
+
+      <div id="victoryLeagueBar" class="hidden mb-6 glass-navy rounded-2xl p-4 sm:p-5 border border-champGold/50 bg-gradient-to-r from-champGold/15 via-navyCard to-champGold/10">
+        <div class="flex flex-col md:flex-row items-center justify-between gap-4">
+          <div class="flex items-center gap-3">
+            <span class="text-3xl">🏆</span>
+            <div>
+              <h3 class="font-display text-2xl sm:text-3xl font-bold uppercase text-champGold leading-none">
+                VICTORY LEAGUE 4v4 SHORT TOURNAMENT MODE
+              </h3>
+              <p class="font-tech text-xs text-slate-300 uppercase tracking-wider mt-0.5">
+                4 Active Starters on Pitch + 8 Rolling Subs on Bench • Fast-Paced Knockout Setup
+              </p>
+            </div>
+          </div>
+          <div class="flex items-center gap-2 font-tech text-xs">
+            <span class="px-3 py-1.5 rounded-lg bg-navyDeep border border-champGold/30 text-champGold font-bold">
+              Format: 4 Outfield / 10-Min Halves
+            </span>
+            <button onclick="autoRotateVictorySub()" class="btn-gold px-3.5 py-1.5 rounded-lg font-bold uppercase tracking-wider">
+              ⚡ Quick Sub Rotation
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="glass-dark rounded-2xl p-4 mb-6 border border-white/10 flex flex-wrap items-center justify-between gap-4 reveal">
+        <div class="flex flex-wrap items-center gap-3">
+          <div class="flex items-center gap-2">
+            <label for="formationSelect" class="font-tech text-xs font-bold uppercase tracking-wider text-slate-400">Formation:</label>
+            <select id="formationSelect" onchange="applyFormationPreset(this.value)" class="bg-navyCard border border-white/15 rounded-xl px-3 py-2 font-tech text-xs font-bold uppercase text-white focus:outline-none focus:border-champGold"></select>
+          </div>
+
+          <div class="flex items-center gap-2 bg-navyCard/80 px-3 py-1.5 rounded-xl border border-white/10">
+            <span class="font-tech text-xs font-bold uppercase text-champGold">3D Tilt:</span>
+            <input id="pitchTiltSlider" type="range" min="0" max="42" value="24" oninput="updatePitchTilt(this.value)" class="w-24 sm:w-28 accent-champGold cursor-pointer" />
+            <span id="pitchTiltLabel" class="font-tech text-xs text-slate-300 w-8">24°</span>
+          </div>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-2">
+          <button id="drawModeBtn" onclick="toggleDrawMode()" class="px-3.5 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/15 font-tech text-xs font-bold uppercase tracking-wider text-slate-200 flex items-center gap-1.5 transition-all">
+            <span>✏️ Draw Run:</span>
+            <span id="drawModeStatus" class="text-slate-400">OFF</span>
+          </button>
+          <button onclick="cycleDrawColor()" id="drawColorBtn" class="px-3 py-2 rounded-xl bg-white/5 border border-white/15 font-tech text-xs font-bold uppercase text-champGold" title="Switch Arrow Color">
+            ● Gold Line
+          </button>
+          <button onclick="clearTacticalLines()" class="px-3 py-2 rounded-xl bg-white/5 hover:bg-red-500/20 border border-white/15 font-tech text-xs font-bold uppercase text-slate-300 hover:text-red-300">
+            Clear Lines
+          </button>
+          <button onclick="shareLineupWhatsApp()" class="btn-gold px-4 py-2 rounded-xl font-tech text-xs font-bold uppercase tracking-wider">
+            📲 Send Lineup
+          </button>
+        </div>
+      </div>
+
+      <div class="tactical-viewport w-full overflow-hidden rounded-3xl p-2 sm:p-6 glass-navy border border-champGold/25 reveal">
+        <div id="tacticalPitch" class="tactical-pitch-3d relative w-full h-[460px] sm:h-[560px] rounded-2xl border-4 border-white/85 overflow-hidden mx-auto" style="transform: rotateX(24deg);">
+          <svg viewBox="0 0 1000 620" preserveAspectRatio="none" class="absolute inset-0 w-full h-full pointer-events-none opacity-85">
+            <rect x="20" y="20" width="960" height="580" fill="none" stroke="#ffffff" stroke-width="4" />
+            <line x1="500" y1="20" x2="500" y2="600" stroke="#ffffff" stroke-width="4" />
+            <circle cx="500" cy="310" r="78" fill="none" stroke="#ffffff" stroke-width="4" />
+            <circle cx="500" cy="310" r="6" fill="#ffffff" />
+            <rect x="20" y="145" width="145" height="330" fill="none" stroke="#ffffff" stroke-width="4" />
+            <rect x="20" y="225" width="55" height="170" fill="none" stroke="#ffffff" stroke-width="4" />
+            <rect x="4" y="265" width="16" height="90" fill="rgba(255,255,255,0.25)" stroke="#ffffff" stroke-width="3" />
+            <rect x="835" y="145" width="145" height="330" fill="none" stroke="#ffffff" stroke-width="4" />
+            <rect x="925" y="225" width="55" height="170" fill="none" stroke="#ffffff" stroke-width="4" />
+            <rect x="980" y="265" width="16" height="90" fill="rgba(255,255,255,0.25)" stroke="#ffffff" stroke-width="3" />
+            <path d="M20 38 A18 18 0 0 0 38 20" fill="none" stroke="#ffffff" stroke-width="3" />
+            <path d="M962 20 A18 18 0 0 0 980 38" fill="none" stroke="#ffffff" stroke-width="3" />
+            <path d="M20 582 A18 18 0 0 1 38 600" fill="none" stroke="#ffffff" stroke-width="3" />
+            <path d="M962 600 A18 18 0 0 1 980 582" fill="none" stroke="#ffffff" stroke-width="3" />
+          </svg>
+
+          <canvas id="tacticalDrawCanvas" class="absolute inset-0 w-full h-full z-20 pointer-events-none"></canvas>
+          <div id="pitchTokensLayer" class="absolute inset-0 z-30"></div>
+        </div>
+
+        <div class="mt-6 pt-5 border-t border-white/10">
+          <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+            <span class="font-tech text-xs font-bold uppercase tracking-widest text-champGold">
+              🔄 Substitutes Bench (<span id="benchCountLabel">1</span>) — Click a Starter then a Sub to Swap
+            </span>
+            <span id="swapHintBadge" class="font-tech text-xs text-slate-400">
+              Drag any player on the grass to reposition freely
+            </span>
+          </div>
+          <div id="benchPlayersContainer" class="flex flex-wrap gap-2.5"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- =========================================================
+       SECTION 4: OFFICIAL HOME JERSEY STUDIO (৳520) -> WHATSAPP
+  ========================================================= -->
+  <section id="jersey-store" class="relative z-10 py-24 px-4 sm:px-6 bg-gradient-to-b from-transparent via-royalBlue/20 to-transparent">
+    <div class="max-w-7xl mx-auto">
+      <div class="text-center max-w-3xl mx-auto mb-14 reveal">
+        <span class="font-tech text-xs sm:text-sm font-bold tracking-[0.25em] uppercase text-champGold block mb-2">
+          Official Club Armor • Home Edition Only
+        </span>
+        <h2 class="font-display text-5xl sm:text-7xl font-bold uppercase text-white leading-none mb-3">
+          JJSC FC <span class="gold-text-gradient">HOME JERSEY</span>
+        </h2>
+        <p class="text-slate-300 text-sm sm:text-base">
+          Royal Navy calligraphic brush-stroke edition with crisp white collar, embroidered JhonJhonia FC shield crest, and gold-yellow <strong class="text-champGold">JJSC FC</strong> front print. Official price: <strong class="text-neonLime">৳<span class="heroPriceTag">520</span></strong>.
+        </p>
+      </div>
+
+      <div class="grid lg:grid-cols-12 gap-8 items-center reveal">
+        <div class="lg:col-span-6">
+          <div class="glass-navy rounded-3xl p-6 sm:p-10 border border-champGold/30 relative overflow-hidden flex flex-col items-center justify-center min-h-[490px] sm:min-h-[540px]">
+            <div class="absolute w-72 h-72 rounded-full bg-royalBlue/50 blur-[90px] pointer-events-none"></div>
+
+            <div class="w-full flex items-center justify-between z-20 mb-4">
+              <span class="px-3.5 py-1 rounded-full bg-champGold/15 border border-champGold/40 text-champGold font-tech text-xs font-bold uppercase tracking-widest">
+                2026 Home Kit • ৳<span class="heroPriceTag">520</span>
+              </span>
+              <button onclick="flipHomeJersey()" class="glass-dark hover:border-champGold text-white px-4 py-2 rounded-xl font-tech text-xs font-bold uppercase tracking-wider flex items-center gap-2 transition-all">
+                <span>🔄</span>
+                <span id="jerseyFlipLabel">Flip to Back</span>
+              </button>
+            </div>
+
+            <div class="jersey-stage w-full max-w-[330px] sm:max-w-[370px] h-[350px] sm:h-[390px] my-2 animate-float-kit cursor-pointer" onclick="flipHomeJersey()">
+              <div id="homeJerseyFlipper" class="jersey-flipper">
+                <div class="jersey-face front">
+                  <svg viewBox="0 0 400 440" class="w-full h-full drop-shadow-[0_25px_35px_rgba(0,0,0,0.85)]">
+                    <defs>
+                      <linearGradient id="jjscNavyBase" x1="0%" y1="0%" x2="100%" y2="100%">
+                        <stop offset="0%" stop-color="#14235C" />
+                        <stop offset="55%" stop-color="#0E1945" />
+                        <stop offset="100%" stop-color="#09102E" />
+                      </linearGradient>
+                      <pattern id="calligraphyStrokes" width="70" height="70" patternUnits="userSpaceOnUse">
+                        <path d="M8 14 Q24 8 36 18 T62 14" fill="none" stroke="#233C94" stroke-width="5" stroke-linecap="round" opacity="0.65"/>
+                        <path d="M12 32 C22 26 24 44 14 52" fill="none" stroke="#233C94" stroke-width="4.5" stroke-linecap="round" opacity="0.6"/>
+                        <path d="M34 30 L58 28 M44 28 L42 54 L60 52" fill="none" stroke="#233C94" stroke-width="5" stroke-linecap="round" opacity="0.65"/>
+                        <path d="M10 62 Q32 56 54 64" fill="none" stroke="#1E3585" stroke-width="4" stroke-linecap="round" opacity="0.6"/>
+                      </pattern>
+                    </defs>
+
+                    <path d="M125 35 L155 22 Q200 48 245 22 L275 35 L368 96 L336 168 L295 142 L295 406 Q200 424 105 406 L105 142 L64 168 L32 96 Z" fill="url(#jjscNavyBase)" stroke="#1E327A" stroke-width="2.5"/>
+                    <path d="M125 35 L155 22 Q200 48 245 22 L275 35 L368 96 L336 168 L295 142 L295 406 Q200 424 105 406 L105 142 L64 168 L32 96 Z" fill="url(#calligraphyStrokes)"/>
+                    <path d="M125 35 Q138 95 105 142" fill="none" stroke="#080E29" stroke-width="2" opacity="0.6"/>
+                    <path d="M275 35 Q262 95 295 142" fill="none" stroke="#080E29" stroke-width="2" opacity="0.6"/>
+                    <path d="M150 23 Q200 62 250 23 L242 36 Q200 72 158 36 Z" fill="#F8FAFC" />
+                    <text id="jerseyFrontNum" x="142" y="132" text-anchor="middle" fill="#FFFFFF" font-family="Teko, sans-serif" font-weight="700" font-size="44">17</text>
+                    <g transform="translate(234, 88)">
+                      <path d="M22 0 L44 8 V26 C44 40 34 50 22 55 C10 50 0 40 0 26 V8 Z" fill="#0E1C4D" stroke="#F5C542" stroke-width="2.5"/>
+                      <path d="M16 12 A6 6 0 0 1 28 12 Z" fill="#F5C542"/>
+                      <text x="22" y="28" text-anchor="middle" fill="#F5C542" font-family="Playfair Display, serif" font-style="italic" font-weight="800" font-size="7.5">JhonJhonia</text>
+                      <text x="22" y="37" text-anchor="middle" fill="#F5C542" font-family="Teko, sans-serif" font-weight="700" font-size="9">FC</text>
+                      <circle cx="23" cy="45" r="4.5" fill="none" stroke="#F5C542" stroke-width="1.4"/>
+                    </g>
+                    <text x="200" y="216" text-anchor="middle" fill="#FDE047" font-family="Chakra Petch, sans-serif" font-weight="700" font-size="34" letter-spacing="3">JJSC FC</text>
+                    <g transform="translate(222, 366)">
+                      <rect x="0" y="0" width="58" height="20" rx="3" fill="#F8FAFC"/>
+                      <text x="29" y="13" text-anchor="middle" fill="#09122E" font-family="Chakra Petch, sans-serif" font-weight="700" font-size="7.5">JHONJHONIA</text>
+                    </g>
+                  </svg>
+                </div>
+
+                <div class="jersey-face back">
+                  <svg viewBox="0 0 400 440" class="w-full h-full drop-shadow-[0_25px_35px_rgba(0,0,0,0.85)]">
+                    <path d="M125 35 L155 24 Q200 36 245 24 L275 35 L368 96 L336 168 L295 142 L295 406 Q200 424 105 406 L105 142 L64 168 L32 96 Z" fill="url(#jjscNavyBase)" stroke="#1E327A" stroke-width="2.5"/>
+                    <path d="M125 35 L155 24 Q200 36 245 24 L275 35 L368 96 L336 168 L295 142 L295 406 Q200 424 105 406 L105 142 L64 168 L32 96 Z" fill="url(#calligraphyStrokes)"/>
+                    <path d="M153 24 Q200 40 247 24 L243 33 Q200 48 157 33 Z" fill="#F8FAFC" />
+                    <circle cx="200" cy="58" r="10" fill="#0E1C4D" stroke="#F5C542" stroke-width="2"/>
+                    <text x="200" y="61" text-anchor="middle" fill="#F5C542" font-family="Teko, sans-serif" font-weight="700" font-size="9">JJ</text>
+                    <text id="jerseyBackName" x="200" y="118" text-anchor="middle" fill="#FFFFFF" font-family="Teko, sans-serif" font-weight="700" font-size="46" letter-spacing="3">AARIZ</text>
+                    <text id="jerseyBackNum" x="200" y="295" text-anchor="middle" fill="#FFFFFF" font-family="Teko, sans-serif" font-weight="700" font-size="185" letter-spacing="-4">17</text>
+                    <rect x="145" y="352" width="110" height="22" rx="4" fill="#FFFFFF"/>
+                    <text x="200" y="367" text-anchor="middle" fill="#09122E" font-family="Chakra Petch, sans-serif" font-weight="700" font-size="11" letter-spacing="1.5">JJSC FC</text>
+                  </svg>
+                </div>
+              </div>
+            </div>
+
+            <p class="font-tech text-xs uppercase tracking-widest text-slate-400">
+              Click the jersey to flip between Front & Back views
+            </p>
+          </div>
+        </div>
+
+        <div class="lg:col-span-6">
+          <div class="glass-navy rounded-3xl p-6 sm:p-8 border border-champGold/25 space-y-5">
+            <div class="flex items-center justify-between border-b border-white/10 pb-4">
+              <div>
+                <h3 class="font-display text-3xl sm:text-4xl font-bold uppercase text-white">Order Official Home Kit</h3>
+                <p class="text-xs text-slate-300">Direct WhatsApp order to JJSC FC Kit Desk (+880 1925-114987)</p>
+              </div>
+              <div class="text-right">
+                <span class="font-display text-4xl font-bold text-champGold leading-none block">৳<span class="heroPriceTag">520</span></span>
+                <span class="font-tech text-[10px] uppercase tracking-widest text-neonLime">Home Edition</span>
+              </div>
+            </div>
+
+            <div>
+              <label class="block font-tech text-xs font-bold uppercase tracking-widest text-slate-300 mb-2">
+                Quick Squad Print Preset:
+              </label>
+              <div class="flex flex-wrap gap-2">
+                <button type="button" onclick="applyKitPreset('AARIZ', 17)" class="px-3 py-1.5 rounded-lg bg-champGold/15 hover:bg-champGold hover:text-navyDeep border border-champGold/40 font-tech text-xs font-bold uppercase text-champGold transition-colors">
+                  👑 AARIZ #17
+                </button>
+                <button type="button" onclick="applyKitPreset('HAMZA', 47)" class="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-champGold hover:text-navyDeep border border-white/15 font-tech text-xs font-bold uppercase text-white transition-colors">
+                  HAMZA #47
+                </button>
+                <button type="button" onclick="applyKitPreset('BAYJID', 10)" class="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-champGold hover:text-navyDeep border border-white/15 font-tech text-xs font-bold uppercase text-white transition-colors">
+                  BAYJID #10
+                </button>
+                <button type="button" onclick="applyKitPreset('ARAFAT', 23)" class="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-champGold hover:text-navyDeep border border-white/15 font-tech text-xs font-bold uppercase text-white transition-colors">
+                  ARAFAT #23
+                </button>
+                <button type="button" onclick="applyKitPreset('NAFIZ', 7)" class="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-champGold hover:text-navyDeep border border-white/15 font-tech text-xs font-bold uppercase text-white transition-colors">
+                  NAFIZ #7
+                </button>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-3 gap-3">
+              <div class="col-span-2">
+                <label for="kitOrderBackName" class="block font-tech text-xs font-bold uppercase tracking-widest text-slate-300 mb-1.5">Jersey Back Name *</label>
+                <input id="kitOrderBackName" type="text" maxlength="14" value="AARIZ" oninput="syncJerseyPreview()"
+                  class="w-full px-4 py-2.5 rounded-xl bg-navyDeep/80 border border-white/15 focus:border-champGold focus:outline-none font-display text-2xl tracking-wider uppercase text-white" />
+              </div>
+              <div>
+                <label for="kitOrderNumber" class="block font-tech text-xs font-bold uppercase tracking-widest text-slate-300 mb-1.5">Number *</label>
+                <input id="kitOrderNumber" type="number" min="1" max="99" value="17" oninput="syncJerseyPreview()"
+                  class="w-full px-4 py-2.5 rounded-xl bg-navyDeep/80 border border-white/15 focus:border-champGold focus:outline-none font-display text-2xl text-center text-white" />
+              </div>
+            </div>
+
+            <div class="grid sm:grid-cols-2 gap-4">
+              <div>
+                <label class="block font-tech text-xs font-bold uppercase tracking-widest text-slate-300 mb-1.5">Select Size *</label>
+                <div class="grid grid-cols-5 gap-1.5">
+                  <button type="button" onclick="setOrderSize('S')" class="order-size-btn py-2 rounded-lg border border-white/15 font-tech text-xs font-bold text-slate-300">S</button>
+                  <button type="button" onclick="setOrderSize('M')" class="order-size-btn py-2 rounded-lg border-2 border-champGold bg-champGold/15 font-tech text-xs font-bold text-champGold">M</button>
+                  <button type="button" onclick="setOrderSize('L')" class="order-size-btn py-2 rounded-lg border border-white/15 font-tech text-xs font-bold text-slate-300">L</button>
+                  <button type="button" onclick="setOrderSize('XL')" class="order-size-btn py-2 rounded-lg border border-white/15 font-tech text-xs font-bold text-slate-300">XL</button>
+                  <button type="button" onclick="setOrderSize('XXL')" class="order-size-btn py-2 rounded-lg border border-white/15 font-tech text-xs font-bold text-slate-300">XXL</button>
+                </div>
+              </div>
+              <div>
+                <label for="kitOrderQty" class="block font-tech text-xs font-bold uppercase tracking-widest text-slate-300 mb-1.5">Quantity</label>
+                <div class="flex items-center gap-2">
+                  <input id="kitOrderQty" type="number" min="1" max="25" value="1" oninput="updateOrderTotal()"
+                    class="w-24 px-3 py-2 rounded-xl bg-navyDeep/80 border border-white/15 focus:border-champGold focus:outline-none font-display text-2xl text-center text-white" />
+                  <div class="font-tech text-xs text-slate-300">
+                    Total: <strong class="text-champGold text-base">৳<span id="kitTotalPrice">520</span></strong>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="grid sm:grid-cols-2 gap-3">
+              <div>
+                <label for="kitBuyerName" class="block font-tech text-xs font-bold uppercase tracking-widest text-slate-300 mb-1.5">Your Full Name *</label>
+                <input id="kitBuyerName" type="text" placeholder="e.g. Tariqul Islam"
+                  class="w-full px-4 py-2.5 rounded-xl bg-navyDeep/80 border border-white/15 focus:border-champGold focus:outline-none text-sm text-white" />
+              </div>
+              <div>
+                <label for="kitBuyerPhone" class="block font-tech text-xs font-bold uppercase tracking-widest text-slate-300 mb-1.5">Your Phone / Location *</label>
+                <input id="kitBuyerPhone" type="text" placeholder="e.g. Jhonjhonia / 017..."
+                  class="w-full px-4 py-2.5 rounded-xl bg-navyDeep/80 border border-white/15 focus:border-champGold focus:outline-none text-sm text-white" />
+              </div>
+            </div>
+
+            <button type="button" onclick="submitJerseyOrderWhatsApp()" class="w-full btn-gold font-tech font-bold text-sm sm:text-base uppercase tracking-widest py-4 rounded-2xl flex items-center justify-center gap-2.5">
+              <span>📲 Order Home Jersey via WhatsApp</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- =========================================================
+       SECTION 4B: POSTER / MATCHDAY CARD GENERATOR STUDIO
+  ========================================================= -->
+  <section id="poster-studio" class="relative z-10 py-24 px-4 sm:px-6">
+    <div class="max-w-7xl mx-auto reveal">
+      <div class="text-center max-w-3xl mx-auto mb-12">
+        <span class="font-tech text-xs sm:text-sm font-bold tracking-[0.25em] uppercase text-neonLime block mb-2">
+          Instant Club Graphics • Download PNG or Share Caption
+        </span>
+        <h2 class="font-display text-5xl sm:text-7xl font-bold uppercase text-white leading-none mb-3">
+          POSTER & <span class="gold-text-gradient">MATCHDAY CARD</span> GENERATOR
+        </h2>
+        <p class="text-slate-300 text-sm sm:text-base">
+          Generate crisp JJSC FC navy-and-gold cards for Matchdays, Captain/Player Spotlights, Victory League Results, and the ৳520 Home Jersey in <strong class="text-champGold">1:1 Square</strong> or <strong class="text-neonCyan">9:16 Status/Story</strong> format.
+        </p>
+      </div>
+
+      <div class="grid lg:grid-cols-12 gap-8 items-start">
+        <div class="lg:col-span-6">
+          <div class="glass-navy rounded-3xl p-5 sm:p-8 border border-champGold/30 flex flex-col items-center">
+            <div class="w-full flex items-center justify-between gap-2 mb-4">
+              <span id="posterRatioBadge" class="px-3 py-1 rounded-full bg-champGold/15 border border-champGold/40 text-champGold font-tech text-xs font-bold uppercase tracking-widest">
+                1:1 Square (1080×1080)
+              </span>
+              <span class="font-tech text-xs text-slate-400 uppercase tracking-wider">
+                Live Render
+              </span>
+            </div>
+
+            <div class="w-full flex items-center justify-center bg-navyDeep/80 rounded-2xl p-3 sm:p-4 border border-white/10 overflow-hidden">
+              <canvas id="jjscPosterCanvas" width="1080" height="1080" class="max-h-[470px] w-auto max-w-full rounded-xl shadow-2xl border border-champGold/25"></canvas>
+            </div>
+
+            <div class="grid sm:grid-cols-2 gap-3 w-full mt-5">
+              <button type="button" onclick="downloadPosterPNG()" class="btn-gold py-3.5 px-4 rounded-xl font-tech text-xs sm:text-sm font-bold uppercase tracking-wider flex items-center justify-center gap-2">
+                <span>⬇️ Download Poster PNG</span>
+              </button>
+              <button type="button" onclick="sharePosterWhatsApp()" class="bg-gradient-to-r from-neonCyan to-neonLime text-navyDeep py-3.5 px-4 rounded-xl font-tech text-xs sm:text-sm font-bold uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg hover:opacity-95 transition-all">
+                <span>📲 Send Caption to WhatsApp</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="lg:col-span-6">
+          <div class="glass-navy rounded-3xl p-6 sm:p-8 border border-champGold/25 space-y-5">
+            <div>
+              <label class="block font-tech text-xs font-bold uppercase tracking-widest text-slate-300 mb-2">
+                1. Choose Card Mode *
+              </label>
+              <div class="grid grid-cols-2 gap-2">
+                <button type="button" id="pmode-matchday" onclick="setPosterMode('matchday')" class="pmode-btn py-2.5 px-3 rounded-xl font-tech text-xs font-bold uppercase tracking-wider bg-champGold text-navyDeep">
+                  ⚔️ Matchday Flyer
+                </button>
+                <button type="button" id="pmode-spotlight" onclick="setPosterMode('spotlight')" class="pmode-btn py-2.5 px-3 rounded-xl font-tech text-xs font-bold uppercase tracking-wider bg-white/5 text-slate-300 hover:text-white border border-white/10">
+                  👑 Player / Captain Spotlight
+                </button>
+                <button type="button" id="pmode-victory" onclick="setPosterMode('victory')" class="pmode-btn py-2.5 px-3 rounded-xl font-tech text-xs font-bold uppercase tracking-wider bg-white/5 text-slate-300 hover:text-white border border-white/10">
+                  🏆 Victory League Result
+                </button>
+                <button type="button" id="pmode-jersey" onclick="setPosterMode('jersey')" class="pmode-btn py-2.5 px-3 rounded-xl font-tech text-xs font-bold uppercase tracking-wider bg-white/5 text-slate-300 hover:text-white border border-white/10">
+                  👕 ৳520 Home Kit Drop
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <label class="block font-tech text-xs font-bold uppercase tracking-widest text-slate-300 mb-2">
+                2. Aspect Ratio *
+              </label>
+              <div class="grid grid-cols-2 gap-2">
+                <button type="button" id="pratio-square" onclick="setPosterRatio('square')" class="pratio-btn py-2.5 px-3 rounded-xl font-tech text-xs font-bold uppercase tracking-wider bg-neonLime text-navyDeep">
+                  ⬜ 1:1 Square (Feed / Post)
+                </button>
+                <button type="button" id="pratio-story" onclick="setPosterRatio('story')" class="pratio-btn py-2.5 px-3 rounded-xl font-tech text-xs font-bold uppercase tracking-wider bg-white/5 text-slate-300 hover:text-white border border-white/10">
+                  📱 9:16 Status / Story
+                </button>
+              </div>
+            </div>
+
+            <div class="grid sm:grid-cols-2 gap-3">
+              <div>
+                <label for="posterPlayerSelect" class="block font-tech text-xs font-bold uppercase tracking-widest text-slate-300 mb-1.5">
+                  Featured Squad Player
+                </label>
+                <select id="posterPlayerSelect" onchange="handlePosterPlayerChange()" class="w-full px-3.5 py-2.5 rounded-xl bg-navyDeep/85 border border-white/15 focus:border-champGold focus:outline-none text-sm text-white"></select>
+              </div>
+              <div>
+                <label for="posterHeadlineInput" class="block font-tech text-xs font-bold uppercase tracking-widest text-slate-300 mb-1.5">
+                  Card Headline *
+                </label>
+                <input id="posterHeadlineInput" type="text" maxlength="36" value="MATCHDAY IN JHONJHONIA" oninput="renderPosterCanvas()"
+                  class="w-full px-3.5 py-2.5 rounded-xl bg-navyDeep/85 border border-white/15 focus:border-champGold focus:outline-none font-tech text-sm font-bold uppercase text-white" />
+              </div>
+            </div>
+
+            <div class="grid sm:grid-cols-2 gap-3">
+              <div>
+                <label for="posterMatchupInput" class="block font-tech text-xs font-bold uppercase tracking-widest text-slate-300 mb-1.5">
+                  Opponent / Scoreline
+                </label>
+                <input id="posterMatchupInput" type="text" maxlength="40" value="JJSC FC vs CHALLENGERS" oninput="renderPosterCanvas()"
+                  class="w-full px-3.5 py-2.5 rounded-xl bg-navyDeep/85 border border-white/15 focus:border-champGold focus:outline-none text-sm text-white" />
+              </div>
+              <div>
+                <label for="posterVenueInput" class="block font-tech text-xs font-bold uppercase tracking-widest text-slate-300 mb-1.5">
+                  Venue / Kickoff / Tagline
+                </label>
+                <input id="posterVenueInput" type="text" maxlength="42" value="Jhonjhonia Arena • Kickoff 4:30 PM" oninput="renderPosterCanvas()"
+                  class="w-full px-3.5 py-2.5 rounded-xl bg-navyDeep/85 border border-white/15 focus:border-champGold focus:outline-none text-sm text-white" />
+              </div>
+            </div>
+
+            <div>
+              <label for="posterCaptionInput" class="block font-tech text-xs font-bold uppercase tracking-widest text-slate-300 mb-1.5">
+                Hype Caption / WhatsApp Note
+              </label>
+              <input id="posterCaptionInput" type="text" maxlength="75" value="Captain Aariz (#17) & Manager Hamza (#47) ready for battle!" oninput="renderPosterCanvas()"
+                class="w-full px-3.5 py-2.5 rounded-xl bg-navyDeep/85 border border-white/15 focus:border-champGold focus:outline-none text-sm text-white" />
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- =========================================================
+       SECTION 5: MATCH CHALLENGE & FAN EDIT (SUGGESTION) -> WHATSAPP
+  ========================================================= -->
+  <section id="match-hub" class="relative z-10 py-24 px-4 sm:px-6">
+    <div class="max-w-5xl mx-auto reveal">
+      <div class="text-center mb-10">
+        <span class="font-tech text-xs sm:text-sm font-bold tracking-[0.25em] uppercase text-neonCyan block mb-2">
+          Direct Line to Manager Hamza & Organiser Aariz
+        </span>
+        <h2 class="font-display text-5xl sm:text-7xl font-bold uppercase text-white leading-none">
+          MATCH CHALLENGE & <span class="gold-text-gradient">FAN EDIT HUB</span>
+        </h2>
+        <p class="text-slate-300 text-sm mt-2">
+          Fill out the required details below—your formatted message routes straight to JJSC FC WhatsApp (<strong class="text-champGold">+880 1925-114987</strong>).
+        </p>
+      </div>
+
+      <div class="glass-navy rounded-3xl p-6 sm:p-10 border border-champGold/30">
+        <div class="flex flex-wrap gap-2 p-1.5 rounded-2xl bg-navyDeep/80 border border-white/10 mb-8">
+          <button id="hub-tab-match" onclick="switchHubTab('match')" class="flex-1 py-3 px-4 rounded-xl font-tech text-xs sm:text-sm font-bold uppercase tracking-wider transition-all bg-champGold text-navyDeep">
+            ⚔️ Challenge JJSC FC for a Match
+          </button>
+          <button id="hub-tab-fan" onclick="switchHubTab('fan')" class="flex-1 py-3 px-4 rounded-xl font-tech text-xs sm:text-sm font-bold uppercase tracking-wider transition-all text-slate-300 hover:text-white">
+            💡 Fan Edit / Suggestion Box
+          </button>
+        </div>
+
+        <form id="matchChallengeForm" onsubmit="submitMatchChallenge(event)" class="space-y-4">
+          <div class="grid sm:grid-cols-2 gap-4">
+            <div>
+              <label class="block font-tech text-xs font-bold uppercase tracking-widest text-slate-300 mb-1.5">Opponent Club Name *</label>
+              <input id="oppClubName" type="text" required placeholder="e.g. Royal FC / Adamjee Blackouts"
+                class="w-full px-4 py-3 rounded-xl bg-navyDeep/80 border border-white/15 focus:border-champGold focus:outline-none text-sm text-white" />
+            </div>
+            <div>
+              <label class="block font-tech text-xs font-bold uppercase tracking-widest text-slate-300 mb-1.5">Your Name & Role *</label>
+              <input id="oppManagerName" type="text" required placeholder="e.g. Rifat (Captain)"
+                class="w-full px-4 py-3 rounded-xl bg-navyDeep/80 border border-white/15 focus:border-champGold focus:outline-none text-sm text-white" />
+            </div>
+          </div>
+
+          <div class="grid sm:grid-cols-3 gap-4">
+            <div>
+              <label class="block font-tech text-xs font-bold uppercase tracking-widest text-slate-300 mb-1.5">Match Format *</label>
+              <select id="oppMatchFormat" class="w-full px-4 py-3 rounded-xl bg-navyDeep/80 border border-white/15 focus:border-champGold focus:outline-none text-sm text-white">
+                <option value="11v11 Full Match">11v11 Full Match</option>
+                <option value="7v7 Turf Match" selected>7v7 Turf Match</option>
+                <option value="6v6 Fast Pitch">6v6 Fast Pitch</option>
+                <option value="4v4 Victory League Challenge">4v4 Victory League Challenge</option>
+              </select>
+            </div>
+            <div>
+              <label class="block font-tech text-xs font-bold uppercase tracking-widest text-slate-300 mb-1.5">Preferred Date & Time *</label>
+              <input id="oppMatchDate" type="text" required placeholder="e.g. Friday 4:30 PM"
+                class="w-full px-4 py-3 rounded-xl bg-navyDeep/80 border border-white/15 focus:border-champGold focus:outline-none text-sm text-white" />
+            </div>
+            <div>
+              <label class="block font-tech text-xs font-bold uppercase tracking-widest text-slate-300 mb-1.5">Ground / Venue *</label>
+              <input id="oppMatchVenue" type="text" required placeholder="e.g. Jhonjhonia Ground"
+                class="w-full px-4 py-3 rounded-xl bg-navyDeep/80 border border-white/15 focus:border-champGold focus:outline-none text-sm text-white" />
+            </div>
+          </div>
+
+          <div>
+            <label class="block font-tech text-xs font-bold uppercase tracking-widest text-slate-300 mb-1.5">Match Terms / Stakes / Message</label>
+            <textarea id="oppMatchNotes" rows="2" placeholder="Friendly match, turf fee split, trophy challenge, etc."
+              class="w-full px-4 py-3 rounded-xl bg-navyDeep/80 border border-white/15 focus:border-champGold focus:outline-none text-sm text-white"></textarea>
+          </div>
+
+          <button type="submit" class="w-full btn-gold font-tech font-bold text-sm sm:text-base uppercase tracking-widest py-4 rounded-2xl">
+            ⚔️ Send Match Challenge to JJSC WhatsApp
+          </button>
+        </form>
+
+        <form id="fanSuggestionForm" onsubmit="submitFanSuggestion(event)" class="hidden space-y-4">
+          <div class="p-4 rounded-2xl bg-neonCyan/10 border border-neonCyan/30 text-xs sm:text-sm text-slate-200">
+            <strong class="text-neonCyan font-tech uppercase tracking-wider">Fan Edit Mode:</strong> Propose a starting XI tweak, captaincy/tactical suggestion, or stat update. Your suggestion posts to our local Fan Wall and opens a direct WhatsApp message to Manager Hamza (<strong class="text-champGold">+880 1925-114987</strong>) for committee approval!
+          </div>
+
+          <div class="grid sm:grid-cols-2 gap-4">
+            <div>
+              <label class="block font-tech text-xs font-bold uppercase tracking-widest text-slate-300 mb-1.5">Your Fan Name *</label>
+              <input id="fanNameInput" type="text" required placeholder="e.g. Shakil (Jhonjhonia Ultra)"
+                class="w-full px-4 py-3 rounded-xl bg-navyDeep/80 border border-white/15 focus:border-neonCyan focus:outline-none text-sm text-white" />
+            </div>
+            <div>
+              <label class="block font-tech text-xs font-bold uppercase tracking-widest text-slate-300 mb-1.5">Suggestion Category *</label>
+              <select id="fanCategoryInput" class="w-full px-4 py-3 rounded-xl bg-navyDeep/80 border border-white/15 focus:border-neonCyan focus:outline-none text-sm text-white">
+                <option value="Lineup / Formation Idea">Lineup / Formation Idea</option>
+                <option value="Player Stat Update Request">Player Stat Update Request</option>
+                <option value="Victory League Strategy">Victory League Strategy</option>
+                <option value="Club Chant / Jersey / Event Idea">Club Chant / Jersey / Event Idea</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label class="block font-tech text-xs font-bold uppercase tracking-widest text-slate-300 mb-1.5">Your Suggestion for JJSC FC *</label>
+            <textarea id="fanMessageInput" rows="3" required placeholder="Write your tactical suggestion or edit request for Hamza & Aariz..."
+              class="w-full px-4 py-3 rounded-xl bg-navyDeep/80 border border-white/15 focus:border-neonCyan focus:outline-none text-sm text-white"></textarea>
+          </div>
+
+          <button type="submit" class="w-full bg-gradient-to-r from-neonCyan to-neonLime text-navyDeep font-tech font-bold text-sm sm:text-base uppercase tracking-widest py-4 rounded-2xl shadow-lg hover:opacity-95 transition-all">
+            💡 Post Fan Suggestion & Send to Manager WhatsApp
+          </button>
+
+          <div id="fanSuggestionsWall" class="pt-4 border-t border-white/10 space-y-2.5"></div>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <!-- =========================================================
+       SECTION 6: COMMITTEE, LEADERSHIP & CLUB PARTNERS (#3: CLICK-TO-REVEAL CARDS)
+  ========================================================= -->
+  <section id="leadership" class="relative z-10 py-24 px-4 sm:px-6 bg-gradient-to-b from-transparent via-navyBase/80 to-transparent">
+    <div class="max-w-7xl mx-auto reveal">
+      <div class="text-center max-w-3xl mx-auto mb-14">
+        <span class="font-tech text-xs sm:text-sm font-bold tracking-[0.25em] uppercase text-champGold block mb-2">
+          The Pillars of Jhonjhonia Jubo Sporting Club • Click Cards to Reveal Dossier
+        </span>
+        <h2 class="font-display text-5xl sm:text-7xl font-bold uppercase text-white leading-none">
+          CLUB COMMITTEE & <span class="gold-text-gradient">OFFICIAL PARTNERS</span>
+        </h2>
+      </div>
+
+      <!-- Feature #3: Click-to-Reveal Club Leadership & Founder Cards -->
+      <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-5 mb-10">
+        <!-- President -->
+        <div onclick="toggleLeaderCard(this)" class="jjsc-leader-card glass-navy rounded-3xl p-6 border border-champGold/40 text-center relative overflow-hidden cursor-pointer hover:-translate-y-1 transition-all">
+          <span class="px-3 py-1 rounded-full bg-champGold/20 text-champGold font-tech text-[10px] font-bold uppercase tracking-widest">
+            Club President
+          </span>
+          <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-champGold to-amber-600 text-navyDeep font-display text-3xl font-bold flex items-center justify-center mx-auto my-4 shadow-lg">
+            MN
+          </div>
+          <h3 class="font-display text-3xl font-bold uppercase text-white tracking-wide">MEHERUN NESA</h3>
+          <p class="font-tech text-xs text-slate-300 uppercase tracking-wider mt-1">President • JJSC FC</p>
+          <span class="font-tech text-[10px] text-champGold uppercase tracking-widest mt-3 inline-block">Tap to reveal dossier ▾</span>
+          <div class="jjsc-leader-detail hidden mt-3 pt-3 border-t border-white/10 text-xs text-slate-300 text-left leading-relaxed">
+            Executive patron guiding club governance, youth tournament entries, and community sponsorship across Jhonjhonia & Gopalganj.
+          </div>
+        </div>
+
+        <!-- Organiser & Captain -->
+        <div onclick="toggleLeaderCard(this)" class="jjsc-leader-card glass-navy rounded-3xl p-6 border border-neonCyan/35 text-center cursor-pointer hover:-translate-y-1 transition-all">
+          <span class="px-3 py-1 rounded-full bg-neonCyan/15 text-neonCyan font-tech text-[10px] font-bold uppercase tracking-widest">
+            Founder • Organiser & Captain
+          </span>
+          <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-neonCyan to-blue-600 text-navyDeep font-display text-3xl font-bold flex items-center justify-center mx-auto my-4 shadow-lg">
+            #17
+          </div>
+          <h3 class="font-display text-3xl font-bold uppercase text-white tracking-wide">AARIZ</h3>
+          <p class="font-tech text-xs text-slate-300 uppercase tracking-wider mt-1">Club Organiser & On-Pitch Captain</p>
+          <span class="font-tech text-[10px] text-neonCyan uppercase tracking-widest mt-3 inline-block">Tap to reveal dossier ▾</span>
+          <div class="jjsc-leader-detail hidden mt-3 pt-3 border-t border-white/10 text-xs text-slate-300 text-left leading-relaxed">
+            Co-founder, matchday organiser, and undisputed Club Captain (#17) holding the all-time club assist record (92 assists, 111 G+A).
+          </div>
+        </div>
+
+        <!-- Organiser & Manager -->
+        <div onclick="toggleLeaderCard(this)" class="jjsc-leader-card glass-navy rounded-3xl p-6 border border-neonLime/35 text-center cursor-pointer hover:-translate-y-1 transition-all">
+          <span class="px-3 py-1 rounded-full bg-neonLime/15 text-neonLime font-tech text-[10px] font-bold uppercase tracking-widest">
+            Founder • Organiser & Manager
+          </span>
+          <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-neonLime to-emerald-600 text-navyDeep font-display text-3xl font-bold flex items-center justify-center mx-auto my-4 shadow-lg">
+            #47
+          </div>
+          <h3 class="font-display text-3xl font-bold uppercase text-white tracking-wide">HAMZA</h3>
+          <p class="font-tech text-xs text-slate-300 uppercase tracking-wider mt-1">Club Organiser & Team Manager</p>
+          <span class="font-tech text-[10px] text-neonLime uppercase tracking-widest mt-3 inline-block">Tap to reveal dossier ▾</span>
+          <div class="jjsc-leader-detail hidden mt-3 pt-3 border-t border-white/10 text-xs text-slate-300 text-left leading-relaxed">
+            Co-founder, head tactician, Vice-Captain, and all-time Golden Boot leader (#47) with 68 career goals for JJSC FC.
+          </div>
+        </div>
+
+        <!-- Funding Manager -->
+        <div onclick="toggleLeaderCard(this)" class="jjsc-leader-card glass-navy rounded-3xl p-6 border border-champGold/30 text-center cursor-pointer hover:-translate-y-1 transition-all">
+          <span class="px-3 py-1 rounded-full bg-champGold/15 text-champGold font-tech text-[10px] font-bold uppercase tracking-widest">
+            Founder • Funding Manager
+          </span>
+          <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-300 to-yellow-600 text-navyDeep font-display text-3xl font-bold flex items-center justify-center mx-auto my-4 shadow-lg">
+            #7
+          </div>
+          <h3 class="font-display text-3xl font-bold uppercase text-white tracking-wide">NAFIZ</h3>
+          <p class="font-tech text-xs text-slate-300 uppercase tracking-wider mt-1">Funding Manager & Midfielder</p>
+          <span class="font-tech text-[10px] text-champGold uppercase tracking-widest mt-3 inline-block">Tap to reveal dossier ▾</span>
+          <div class="jjsc-leader-detail hidden mt-3 pt-3 border-t border-white/10 text-xs text-slate-300 text-left leading-relaxed">
+            Co-founder and Club Treasurer managing match fees, kit logistics, and tournament registrations while anchoring midfield (#7).
+          </div>
+        </div>
+      </div>
+
+      <!-- Official Club Partners Strip -->
+      <div class="glass-dark rounded-3xl p-6 sm:p-8 border border-champGold/25">
+        <div class="text-center mb-6">
+          <span class="font-tech text-xs font-bold uppercase tracking-[0.25em] text-champGold">
+            Official JJSC FC Club Partners
+          </span>
+        </div>
+        <div class="grid md:grid-cols-3 gap-4 text-center">
+          <div class="p-4 rounded-2xl bg-navyCard/80 border border-white/10">
+            <span class="font-tech text-[10px] uppercase tracking-widest text-neonCyan block mb-1">Club Partner</span>
+            <h4 class="font-display text-3xl font-bold uppercase text-white tracking-wide">ARSHIYA HASSAN</h4>
+          </div>
+          <div class="p-4 rounded-2xl bg-navyCard/80 border border-white/10">
+            <span class="font-tech text-[10px] uppercase tracking-widest text-champGold block mb-1">Club Partner</span>
+            <h4 class="font-display text-3xl font-bold uppercase text-white tracking-wide">TARIK HASSAN</h4>
+          </div>
+          <div class="p-4 rounded-2xl bg-navyCard/80 border border-white/10">
+            <span class="font-tech text-[10px] uppercase tracking-widest text-neonLime block mb-1">Club Partner</span>
+            <h4 class="font-display text-3xl font-bold uppercase text-white tracking-wide">AMJAD HOSSAIN</h4>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- =========================================================
+       SECTION 7: PASSWORD-PROTECTED MANAGER EDIT CONSOLE (MAIN PAGE)
+  ========================================================= -->
+  <section id="manager-console" class="relative z-10 py-24 px-4 sm:px-6">
+    <div class="max-w-7xl mx-auto reveal">
+      <div class="glass-navy rounded-3xl p-6 sm:p-10 border-2 border-champGold/45 relative overflow-hidden">
+        <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-white/10 pb-6 mb-8">
+          <div>
+            <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-champGold/15 border border-champGold/40 text-champGold font-tech text-xs font-bold uppercase tracking-widest mb-2">
+              <span id="consoleStatusDot" class="w-2 h-2 rounded-full bg-red-400"></span>
+              <span id="consoleStatusText">PREMIERSHIP COMMITTEE VAULT • LOCKED</span>
+            </div>
+            <h2 class="font-display text-4xl sm:text-6xl font-bold uppercase text-white leading-none">
+              MANAGER EDIT <span class="gold-text-gradient">COMMAND CENTER</span>
+            </h2>
+          </div>
+
+          <button id="lockConsoleBtn" onclick="lockManagerConsole()" class="hidden px-4 py-2.5 rounded-xl bg-red-500/20 hover:bg-red-500/30 border border-red-400/40 font-tech text-xs font-bold uppercase tracking-wider text-red-200">
+            🔒 Lock Console
+          </button>
+        </div>
+
+        <div id="managerLockScreen" class="max-w-md mx-auto text-center py-6">
+          <div class="w-16 h-16 rounded-2xl bg-champGold/15 border border-champGold/40 text-champGold text-3xl flex items-center justify-center mx-auto mb-4">
+            🛡️
+          </div>
+          <h3 class="font-display text-3xl font-bold uppercase text-white mb-2">Committee Access Required</h3>
+          <p class="text-xs sm:text-sm text-slate-300 mb-6">
+            Only the JJSC FC Committee (Manager Hamza, Captain Aariz & Officials) can unlock live database editing for goals, assists, squad roster, anthem track, and kit pricing.
+          </p>
+
+          <form onsubmit="unlockManagerConsole(event)" class="space-y-3" id="managerPasswordForm">
+            <div class="relative">
+              <input id="managerPassInput" type="password" placeholder="Enter Committee Password..."
+                class="w-full px-4 py-3.5 rounded-xl bg-navyDeep border border-champGold/40 focus:border-champGold focus:outline-none text-center font-tech tracking-widest text-white" />
+              <button type="button" onclick="togglePassVisibility()" class="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-tech text-slate-400 hover:text-champGold">
+                SHOW
+              </button>
+            </div>
+            <p id="managerPassError" class="hidden text-xs font-tech font-bold text-red-400 uppercase tracking-wider">
+              ✕ Invalid Committee Password! Access Denied.
+            </p>
+            <button type="submit" class="w-full btn-gold font-tech font-bold text-sm uppercase tracking-widest py-3.5 rounded-xl">
+              🔓 Unlock Manager Premiership
+            </button>
+          </form>
+        </div>
+
+        <div id="managerUnlockedPanel" class="hidden space-y-8">
+          <div class="grid md:grid-cols-3 gap-4 p-5 rounded-2xl bg-navyDeep/80 border border-white/10">
+            <div class="md:col-span-2">
+              <label class="block font-tech text-xs font-bold uppercase tracking-widest text-champGold mb-1.5">Club Hero Slogan</label>
+              <input id="editSloganInput" type="text" class="w-full px-4 py-2.5 rounded-xl bg-navyCard border border-white/15 text-sm text-white focus:border-champGold focus:outline-none" />
+            </div>
+            <div>
+              <label class="block font-tech text-xs font-bold uppercase tracking-widest text-champGold mb-1.5">Home Jersey Price (৳)</label>
+              <input id="editPriceInput" type="number" min="100" class="w-full px-4 py-2.5 rounded-xl bg-navyCard border border-white/15 text-sm text-white focus:border-champGold focus:outline-none" />
+            </div>
+            <div>
+              <label class="
